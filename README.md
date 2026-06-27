@@ -114,6 +114,27 @@ npx skills remove albarralnunez/ghshot     # remove the skill
 # chrome://extensions → Remove "ghshot"
 ```
 
+## Publishing the extension
+
+The extension is store-ready. To package it:
+
+```bash
+make zip          # → dist/ghshot-extension-<version>.zip
+```
+
+Upload that zip in the [Chrome Web Store dashboard](https://chrome.google.com/webstore/devconsole)
+(one-time $5 developer registration). Listing copy and permission justifications are in
+[`store/listing.md`](./store/listing.md); replace the placeholder
+[`store/screenshot-1.png`](./store/) with real captures (see [`store/README.md`](./store/README.md)).
+Icons live in `extension/icons/` and are regenerated with `make assets`.
+
+Privacy policy: [`PRIVACY.md`](./PRIVACY.md) (also the policy URL for the store form).
+
+Tip: for personal/small-team use you don't need the store at all — **Load unpacked** the
+`extension/` directory from `chrome://extensions`. The store is only for wider, searchable
+distribution (expect a permissions-justification review because of the github.com host
+access). The same MV3 build also works on Firefox (AMO).
+
 ## Credits
 
 Inspired by [vipulgupta2048/gitshot](https://github.com/vipulgupta2048/gitshot); this is an

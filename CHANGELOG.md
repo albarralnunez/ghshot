@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Chrome Web Store packaging: generated extension icons (16/48/128), a privacy policy
+  (`PRIVACY.md`), a store listing + screenshot placeholder (`store/`), a stdlib asset
+  generator (`scripts/gen-assets.py`), and `make zip` / `make assets` / `make lint` /
+  `make test` targets.
+
 ## [0.1.0] - 2026-06-27
 
 ### Added

@@ -25,3 +25,6 @@ bridge-token
 *.log
 /tmp/
 node_modules/
+
+# Packaged extension zips
+/dist/
