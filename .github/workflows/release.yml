@@ -30,6 +30,9 @@ jobs:
       - name: Build extension zip
         run: |
           make zip
+          # Stable, version-less copy so README can link
+          # /releases/latest/download/ghshot-extension.zip forever.
+          cp dist/ghshot-extension-*.zip dist/ghshot-extension.zip
           ls -l dist/
 
       - name: Checksums

@@ -54,8 +54,27 @@ It auto-creates a token at `~/.config/ghshot/bridge-token` (chmod 0600) unless
 
 ### 3. The Chrome extension
 
+Get the extension one of two ways:
+
+- **From the latest release (no clone needed)** — download and unzip:
+
+  ```bash
+  curl -fsSL -o ghshot-extension.zip \
+    https://github.com/albarralnunez/ghshot/releases/latest/download/ghshot-extension.zip
+  unzip ghshot-extension.zip -d ghshot-extension
+  ```
+
+  ([latest release page](https://github.com/albarralnunez/ghshot/releases/latest) ·
+  [direct download](https://github.com/albarralnunez/ghshot/releases/latest/download/ghshot-extension.zip) —
+  both always point at the newest version.)
+
+- **From a clone** — just use the `extension/` directory in this repo.
+
+Then load it:
+
 1. Open `chrome://extensions`, enable **Developer mode**.
-2. **Load unpacked** → select the `extension/` directory.
+2. **Load unpacked** → select the unzipped `ghshot-extension/` folder (or the repo's
+   `extension/` directory).
 3. Open the extension's **Options**, set:
    - **Bridge URL**: `http://127.0.0.1:41330` (default)
    - **Token**: the value from `bridge/ghshot-bridge --print-token`
