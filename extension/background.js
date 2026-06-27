@@ -177,70 +177,90 @@ async function uploadToGitHub(repo, blob, filename) {
 }
 
 // ---------------------------------------------------------------------------
-// Bridge config + long-poll loop.
+// Bridge config + long-poll loops (one per configured bridge).
+//
+// Multiple bridges are supported: e.g. a local bridge on 127.0.0.1 and a remote
+// bridge on another machine over Tailscale. Each is polled independently; a job
+// is fetched from, and its result posted back to, the bridge it came from.
 // ---------------------------------------------------------------------------
 
-async function getConfig() {
-  const stored = await chrome.storage.local.get(["bridgeUrl", "token"]);
-  let bridgeUrl = (stored.bridgeUrl || DEFAULT_BRIDGE_URL).trim();
-  bridgeUrl = bridgeUrl.replace(/\/+$/, "");
-  return { bridgeUrl, token: (stored.token || "").trim() };
+// Read the configured bridges as [{ url, token }]. Migrates the legacy single
+// { bridgeUrl, token } shape to a one-element list.
+async function getBridges() {
+  const stored = await chrome.storage.local.get(["bridges", "bridgeUrl", "token"]);
+  let list = Array.isArray(stored.bridges) ? stored.bridges : [];
+  if (!list.length && (stored.bridgeUrl || stored.token)) {
+    list = [{ url: stored.bridgeUrl || DEFAULT_BRIDGE_URL, token: stored.token || "" }];
+  }
+  const seen = new Set();
+  const out = [];
+  for (const b of list) {
+    const url = String((b && b.url) || "").trim().replace(/\/+$/, "");
+    const token = String((b && b.token) || "").trim();
+    if (!url || !token || seen.has(url)) continue;
+    seen.add(url);
+    out.push({ url, token });
+  }
+  return out;
 }
 
-let pollLoopRunning = false;
+// url -> generation. A loop runs while RUNNING.get(url) === its own generation.
+const RUNNING = new Map();
+let GENERATION = 0;
 
-async function pollLoop() {
-  if (pollLoopRunning) return;
-  pollLoopRunning = true;
-  console.debug("[ghshot] poll loop started");
+// Reconcile running loops with the configured bridges: start loops for new
+// bridges, let loops for removed bridges exit on their next iteration.
+async function supervise() {
+  const bridges = await getBridges();
+  const wanted = new Set(bridges.map((b) => b.url));
+  for (const url of [...RUNNING.keys()]) {
+    if (!wanted.has(url)) RUNNING.delete(url);
+  }
+  for (const b of bridges) {
+    if (!RUNNING.has(b.url)) {
+      const gen = ++GENERATION;
+      RUNNING.set(b.url, gen);
+      pollBridge(b.url, gen);
+    }
+  }
+}
+
+async function pollBridge(url, gen) {
+  console.debug("[ghshot] loop start:", url);
   try {
-    // Run until interrupted by a network error (then back off and let the
-    // alarm/startup hooks restart us).
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const { bridgeUrl, token } = await getConfig();
-      if (!token) {
-        // No token configured: do nothing. Options page must be set up first.
-        console.debug("[ghshot] no token configured; idle");
-        return;
-      }
+    while (RUNNING.get(url) === gen) {
+      // Re-read the token each iteration so edits apply without a restart.
+      const b = (await getBridges()).find((x) => x.url === url);
+      if (!b) return; // removed from config
+      const token = b.token;
 
       let pollResp;
       try {
-        pollResp = await fetch(bridgeUrl + POLL_PATH, {
-          headers: { [TOKEN_HEADER]: token },
-        });
+        pollResp = await fetch(url + POLL_PATH, { headers: { [TOKEN_HEADER]: token } });
       } catch (err) {
-        console.debug("[ghshot] poll network error, backing off:", String(err));
+        console.debug("[ghshot] poll network error (%s), backing off:", url, String(err));
         await sleep(NETWORK_RETRY_MS);
         continue;
       }
-
-      if (pollResp.status === 204) {
-        // No job pending within the long-poll window; poll again immediately.
-        continue;
-      }
+      if (pollResp.status === 204) continue; // no job in the long-poll window
       if (!pollResp.ok) {
-        console.debug("[ghshot] poll returned HTTP", pollResp.status);
+        console.debug("[ghshot] poll %s returned HTTP", url, pollResp.status);
         await sleep(NETWORK_RETRY_MS);
         continue;
       }
-
       let job;
       try {
         job = await pollResp.json();
       } catch (err) {
-        console.debug("[ghshot] bad poll JSON:", String(err));
+        console.debug("[ghshot] bad poll JSON from %s:", url, String(err));
         await sleep(NETWORK_RETRY_MS);
         continue;
       }
-
-      await handleJob(bridgeUrl, token, job);
-      // Loop immediately to pick up the next job.
+      await handleJob(url, token, job);
     }
   } finally {
-    pollLoopRunning = false;
-    console.debug("[ghshot] poll loop stopped");
+    if (RUNNING.get(url) === gen) RUNNING.delete(url);
+    console.debug("[ghshot] loop stop:", url);
   }
 }
 
@@ -289,19 +309,24 @@ chrome.alarms.create("ghshot-poll", { periodInMinutes: 1 });
 
 chrome.runtime.onInstalled.addListener(() => {
   console.debug("[ghshot] onInstalled");
-  pollLoop();
+  supervise();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   console.debug("[ghshot] onStartup");
-  pollLoop();
+  supervise();
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "ghshot-poll") {
-    pollLoop();
+    supervise();
   }
 });
 
-// Kick the loop on initial worker evaluation too.
-pollLoop();
+// React to Options changes (bridges added/removed/edited) without a restart.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local") supervise();
+});
+
+// Kick the loops on initial worker evaluation too.
+supervise();

@@ -83,6 +83,27 @@ Then load it:
 Keep Chrome open and signed in to github.com. The extension long-polls the bridge and
 performs uploads from your session. **No cookies are exported and no password is stored.**
 
+## Remote bridge (Tailscale) & multiple bridges
+
+The CLI/bridge and your browser don't have to be on the same machine. To upload from a
+project on **machine A** while the browser/session lives on **machine B**, bind the bridge
+to a private address both can reach (e.g. a Tailscale IP) and point the extension at it:
+
+```bash
+# on machine A (where ghshot runs):
+ghshot-bridge --host 100.69.42.73        # its Tailscale IP; or GHSHOT_BRIDGE_HOST=...
+export GHSHOT_BRIDGE_URL=http://100.69.42.73:41330   # so the CLI hits the same address
+```
+
+Then in the extension **Options** on machine B, add a bridge with URL
+`http://100.69.42.73:41330` and that bridge's token. The bridge stays **token-gated and
+origin-guarded**, but is now reachable on the chosen interface — only use a private one
+(Tailscale, not `0.0.0.0` on a public network).
+
+The extension supports **multiple bridges** at once — add as many URL+token pairs as you
+like (e.g. a local `127.0.0.1` bridge and a remote Tailscale bridge); it polls them all and
+handles whichever has a job.
+
 ## Quickstart
 
 ```bash
