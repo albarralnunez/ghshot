@@ -61,16 +61,49 @@ max_bytes="${GHSHOT_MAX_BYTES:-$MAX_BYTES_DEFAULT}"
 # ---- parse args ----
 while [ $# -gt 0 ]; do
   case "$1" in
-    --raw) mode="raw"; shift ;;
-    --json) mode="json"; shift ;;
-    --pr) target_kind="pr"; target_num="${2:-}"; shift 2 || shift ;;
-    --issue) target_kind="issue"; target_num="${2:-}"; shift 2 || shift ;;
-    --force | -f) force=1; shift ;;
-    --version | -V) printf 'ghshot %s\n' "$VERSION"; exit 0 ;;
-    -h | --help) usage; exit 0 ;;
-    --) shift; while [ $# -gt 0 ]; do files+=("$1"); shift; done; break ;;
+    --raw)
+      mode="raw"
+      shift
+      ;;
+    --json)
+      mode="json"
+      shift
+      ;;
+    --pr)
+      target_kind="pr"
+      target_num="${2:-}"
+      shift 2 || shift
+      ;;
+    --issue)
+      target_kind="issue"
+      target_num="${2:-}"
+      shift 2 || shift
+      ;;
+    --force | -f)
+      force=1
+      shift
+      ;;
+    --version | -V)
+      printf 'ghshot %s\n' "$VERSION"
+      exit 0
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      while [ $# -gt 0 ]; do
+        files+=("$1")
+        shift
+      done
+      break
+      ;;
     -*) die "unknown flag: $1 (see --help)" ;;
-    *) files+=("$1"); shift ;;
+    *)
+      files+=("$1")
+      shift
+      ;;
   esac
 done
 
@@ -116,7 +149,8 @@ vet_file() {
   [ "$force" = 1 ] && return 0
   case "$lc" in
     .env | .env.* | *.pem | *.key | *.pfx | *.p12 | *.kdbx | id_rsa* | id_dsa* | id_ecdsa* | id_ed25519* | .npmrc | .netrc | *.gpg | *.asc | *secret* | *credential* | *password*)
-      die "refusing to upload sensitive-looking file: $base (override with --force)" ;;
+      die "refusing to upload sensitive-looking file: $base (override with --force)"
+      ;;
   esac
   case "$lc" in
     *.png | *.jpg | *.jpeg | *.gif | *.webp | *.svg | *.bmp | *.apng | *.avif | *.tif | *.tiff | *.ico) : ;;
@@ -150,8 +184,8 @@ upload_one() {
   [ -n "$attach_repo" ] || attach_repo="$(resolve_repo)"
   url="$(curl -fsS -H "X-Ghshot-Token: $bridge_token" \
     -F repo="$attach_repo" -F file=@"$path" \
-    "$bridge_url/v1/upload?format=text")" \
-    || die "upload failed via $bridge_url — is Chrome open and signed in to github.com, with the ghshot extension installed and configured with this bridge URL/token?"
+    "$bridge_url/v1/upload?format=text")" ||
+    die "upload failed via $bridge_url — is Chrome open and signed in to github.com, with the ghshot extension installed and configured with this bridge URL/token?"
   url="$(printf '%s' "$url" | tr -d '[:space:]')"
   case "$url" in
     https://*) ;;
@@ -161,24 +195,32 @@ upload_one() {
 }
 
 # ---- upload everything, build markdown (always inline) ----
-md=""; first_url=""
+md=""
+first_url=""
 for f in "${files[@]}"; do
   url="$(upload_one "$f")"
   [ -n "$first_url" ] || first_url="$url"
-  alt="$(basename -- "$f")"; alt="${alt%.*}"; [ -n "$alt" ] || alt="image"
+  alt="$(basename -- "$f")"
+  alt="${alt%.*}"
+  [ -n "$alt" ] || alt="image"
   md+="![${alt}](${url})"$'\n'
 done
 md="${md%$'\n'}"
 
-# JSON-escape a string (preserves newlines as \n)
+# JSON-escape a string (preserves newlines as \n). Pure bash (3.2-safe) — avoids the
+# BSD/GNU `sed N` slurp difference that drops single-line input on macOS.
 json_escape() {
-  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a' -e 'N' -e '$!ba' -e 's/\n/\\n/g'
+  local s="$1"
+  s="${s//\\/\\\\}" # backslash -> \\
+  s="${s//\"/\\\"}" # quote     -> \"
+  s="${s//$'\n'/\\n}"
+  printf '%s' "$s"
 }
 
 # ---- post a comment, or print ----
 if [ -n "$target_kind" ]; then
-  printf '%s\n' "$md" | gh "$target_kind" comment "$target_num" --body-file - >&2 \
-    || die "failed to comment on $target_kind #$target_num"
+  printf '%s\n' "$md" | gh "$target_kind" comment "$target_num" --body-file - >&2 ||
+    die "failed to comment on $target_kind #$target_num"
   printf 'ghshot: commented on %s #%s\n' "$target_kind" "$target_num" >&2
   exit 0
 fi
@@ -187,6 +229,7 @@ case "$mode" in
   raw) printf '%s\n' "$first_url" ;;
   json)
     printf '{"url":"%s","markdown":"%s","visibility":"private"}\n' \
-      "$(json_escape "$first_url")" "$(json_escape "$md")" ;;
+      "$(json_escape "$first_url")" "$(json_escape "$md")"
+    ;;
   *) printf '%s\n' "$md" ;;
 esac
