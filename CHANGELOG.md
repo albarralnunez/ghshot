@@ -7,18 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-27
+
+### Changed
+
+- Documentation and the extension's host permissions are now network-agnostic: the host
+  permissions cover loopback and the common private ranges (`10.*`, `192.168.*`, `100.*`)
+  instead of naming any particular VPN/overlay.
+
 ## [0.2.0] - 2026-06-27
 
 ### Added
 
 - **Remote bridge bind** — `ghshot-bridge --host <addr>` (or `GHSHOT_BRIDGE_HOST`)
-  binds a non-loopback address (e.g. a Tailscale IP) so a browser on another machine can
-  reach the bridge. Still token-gated and origin-guarded; default stays `127.0.0.1`.
+  binds a non-loopback address so a browser on another machine can reach the bridge. Still
+  token-gated and origin-guarded; default stays `127.0.0.1`.
 - **Multiple bridges in the extension** — the Options page now manages a *list* of
   bridges (URL + token each), and the service worker polls them all concurrently. Use it
-  to drive a local bridge and a remote (Tailscale) bridge from one browser. Legacy
-  single-bridge settings are migrated automatically. Added `http://*.ts.net/*` and
-  `http://100.*/*` host permissions for tailnet bridges.
+  to drive a local bridge and a remote bridge from one browser. Legacy single-bridge
+  settings are migrated automatically.
 
 ## [0.1.1] - 2026-06-27
 
@@ -60,7 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CI (shellcheck, shfmt, py_compile, bats on Ubuntu + macOS), issue/PR templates,
   dependabot, and hermetic bats tests with a `gh` stub.
 
-[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/albarralnunez/ghshot/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/albarralnunez/ghshot/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/albarralnunez/ghshot/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/albarralnunez/ghshot/releases/tag/v0.1.0

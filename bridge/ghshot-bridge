@@ -34,7 +34,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 41330
 DEFAULT_TOKEN_FILE = os.path.expanduser("~/.config/ghshot/bridge-token")
@@ -567,15 +567,16 @@ def main(argv=None):
         prog="ghshot-bridge",
         description="Long-poll HTTP bridge for the ghshot Chrome extension. "
                     "Binds 127.0.0.1 by default; use --host to expose it to a "
-                    "remote browser (e.g. over Tailscale).",
+                    "browser on another machine.",
     )
     default_host = os.environ.get("GHSHOT_BRIDGE_HOST") or DEFAULT_HOST
     default_port = int(os.environ.get("GHSHOT_BRIDGE_PORT") or DEFAULT_PORT)
     parser.add_argument(
         "--host", default=default_host,
-        help="Address to bind (default: $GHSHOT_BRIDGE_HOST or %s). Use a "
-             "Tailscale IP to let a browser on another machine reach the "
-             "bridge; it stays token-gated and origin-guarded." % DEFAULT_HOST,
+        help="Address to bind (default: $GHSHOT_BRIDGE_HOST or %s). Set a "
+             "private address reachable from the browser's machine to use a "
+             "remote browser; it stays token-gated and origin-guarded, so only "
+             "bind an address on a trusted network." % DEFAULT_HOST,
     )
     parser.add_argument(
         "--port", type=int, default=default_port,

@@ -180,8 +180,8 @@ async function uploadToGitHub(repo, blob, filename) {
 // Bridge config + long-poll loops (one per configured bridge).
 //
 // Multiple bridges are supported: e.g. a local bridge on 127.0.0.1 and a remote
-// bridge on another machine over Tailscale. Each is polled independently; a job
-// is fetched from, and its result posted back to, the bridge it came from.
+// bridge on another machine. Each is polled independently; a job is fetched
+// from, and its result posted back to, the bridge it came from.
 // ---------------------------------------------------------------------------
 
 // Read the configured bridges as [{ url, token }]. Migrates the legacy single
