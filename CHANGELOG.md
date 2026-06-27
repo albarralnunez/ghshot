@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-27
+
+### Fixed
+
+- Bridge CORS: the extension's **Options → Test connection** (and any preflighted request
+  from an extension *page*, which—unlike the service worker—does not get the host-permission
+  CORS exemption) failed with `TypeError: Failed to fetch`. The bridge now answers
+  `OPTIONS` preflights (204) and echoes `Access-Control-Allow-Origin` for
+  `chrome-extension://` origins, with `Vary: Origin` and `Access-Control-Allow-Headers:
+  X-Ghshot-Token, Content-Type`. Website origins are still rejected; non-browser callers
+  (no Origin) get no CORS headers. Uploads were unaffected (they run in the CORS-exempt
+  service worker).
+
 ### Added
 
 - Chrome Web Store packaging: generated extension icons (16/48/128), a privacy policy
@@ -34,5 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CI (shellcheck, shfmt, py_compile, bats on Ubuntu + macOS), issue/PR templates,
   dependabot, and hermetic bats tests with a `gh` stub.
 
-[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/albarralnunez/ghshot/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/albarralnunez/ghshot/releases/tag/v0.1.0

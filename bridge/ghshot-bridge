@@ -34,7 +34,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 DEFAULT_PORT = 41330
 DEFAULT_TOKEN_FILE = os.path.expanduser("~/.config/ghshot/bridge-token")
 TOKEN_HEADER = "X-Ghshot-Token"
@@ -215,6 +215,19 @@ class GhshotHandler(BaseHTTPRequestHandler):
     token = None
     store = None
 
+    def end_headers(self):
+        # CORS: extension *pages* (options/popup) do NOT get the host-permission
+        # CORS exemption that the service worker enjoys, so their fetch() to the
+        # bridge needs Access-Control-Allow-Origin to be readable. Echo the
+        # extension's own origin (already gated to chrome-extension:// by
+        # _origin_ok / do_OPTIONS). Other callers (CLI/curl, no Origin) get none.
+        origin = self.headers.get("Origin")
+        if origin and origin.startswith("chrome-extension://"):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Headers", "X-Ghshot-Token, Content-Type")
+        BaseHTTPRequestHandler.end_headers(self)
+
     # -- helpers ------------------------------------------------------------
 
     def _send_json(self, status, obj):
@@ -283,6 +296,17 @@ class GhshotHandler(BaseHTTPRequestHandler):
             self.rfile.read(min(length, MAX_BODY_BYTES))
 
     # -- routing ------------------------------------------------------------
+
+    def do_OPTIONS(self):
+        # CORS preflight. Unauthenticated by design (browsers strip auth headers
+        # from preflights); end_headers() adds the Allow-Origin/Allow-Headers.
+        if not self._origin_ok():
+            return self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden origin"})
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.send_header("Content-Length", "0")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.end_headers()
 
     def do_GET(self):
         if not self._origin_ok():
