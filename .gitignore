@@ -1,0 +1,27 @@
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Python bytecode (bridge is stdlib-only, but py_compile emits caches)
+__pycache__/
+*.pyc
+*.pyo
+
+# Local secrets / runtime state — NEVER commit
+.env
+.env.*
+bridge-token
+*.pem
+*.key
+
+# Test / build artifacts
+*.log
+/tmp/
+node_modules/

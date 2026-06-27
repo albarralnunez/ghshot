@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Keep GitHub Actions pinned versions current. ghshot has no package-manager
+  # dependencies (bash + python3 stdlib + plain JS), so this is the only ecosystem.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "ci"

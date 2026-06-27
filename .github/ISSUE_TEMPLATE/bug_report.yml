@@ -1,0 +1,75 @@
+name: Bug report
+description: Report a problem with the ghshot CLI, bridge, or extension
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug! Please do **not** paste tokens, cookies, or private image
+        contents into this report.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part is affected?
+      options:
+        - CLI skill (ghshot.sh)
+        - Bridge (ghshot-bridge)
+        - Chrome extension
+        - Docs / other
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      description: Which backend were you using (if relevant)?
+      options:
+        - "not applicable"
+        - attachments
+        - s3
+        - release
+    validations:
+      required: false
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including any error output (redact secrets).
+      placeholder: When I ran `ghshot.sh shot.png` I got …
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `…`
+        2. …
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: false
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, bash version (`bash --version`), `gh --version`, python3 version, Chrome version.
+      render: text
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I confirmed `gh auth status` is OK (for the release backend or when commenting).
+          required: false
+        - label: I did not include any secrets, tokens, or private images in this report.
+          required: true

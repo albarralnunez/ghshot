@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest an idea for ghshot
+title: "[feat]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! Note the project's **low-dependency invariant**: bash 3.2 +
+        coreutils + `gh` for the CLI, python3 stdlib for the bridge, plain JS for the
+        extension. Proposals that keep within these constraints are much easier to accept.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: checkboxes
+    id: invariant
+    attributes:
+      label: Dependency invariant
+      options:
+        - label: This can be done without adding new runtime dependencies or a build step.
+          required: false

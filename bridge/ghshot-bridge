@@ -1,0 +1,624 @@
+#!/usr/bin/env python3
+"""ghshot-bridge — local long-poll HTTP bridge for the ghshot Chrome extension.
+
+This process binds 127.0.0.1 only. It is the meeting point between:
+
+    CLI (curl)  --HTTP-->  THIS BRIDGE  <--HTTP long-poll--  Chrome extension
+
+The CLI POSTs an image to /v1/upload and blocks. The extension long-polls
+/v1/poll, downloads the image bytes from /v1/blob/<id>, uploads them to
+github.com using the user's *existing* browser session, then reports the
+resulting URL back to /v1/result. The bridge unblocks the CLI with that URL.
+
+No cookies are extracted, no secrets are stored: the upload happens inside the
+extension's authenticated session.
+
+Standard library ONLY (http.server, threading, secrets, json, os, mimetypes,
+urllib, email, argparse, signal). The legacy `cgi` module is intentionally NOT
+used; multipart bodies are parsed with the `email` package.
+"""
+
+import argparse
+import json
+import mimetypes
+import os
+import re
+import secrets
+import signal
+import sys
+import threading
+import time
+from email.parser import BytesParser
+from email.policy import default as email_default_policy
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse, parse_qs
+
+VERSION = "0.1.0"
+DEFAULT_PORT = 41330
+DEFAULT_TOKEN_FILE = os.path.expanduser("~/.config/ghshot/bridge-token")
+TOKEN_HEADER = "X-Ghshot-Token"
+
+# owner/name, GitHub's own allowed character set (owner: alnum + single hyphens;
+# repo: alnum . _ -). Blocks path traversal / log injection via the repo field.
+REPO_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+$")
+
+# Hard cap on a request body read into memory (loopback DoS guard).
+MAX_BODY_BYTES = 64 * 1024 * 1024  # 64 MiB
+
+# How long the CLI's /v1/upload blocks waiting for the final result.
+RESULT_WAIT_SECONDS = 120
+# If no extension has *claimed* the job within this window, the CLI gets a 504
+# telling the user the extension is not connected.
+CLAIM_WAIT_SECONDS = 30
+# How long the extension's /v1/poll blocks waiting for a job to appear.
+POLL_WAIT_SECONDS = 25
+
+
+# ---------------------------------------------------------------------------
+# Job store (in-memory, thread-safe).
+# ---------------------------------------------------------------------------
+
+class Job:
+    __slots__ = (
+        "id", "repo", "filename", "content_type", "data",
+        "created_at", "claimed", "claimed_at",
+        "result_url", "result_error", "done",
+    )
+
+    def __init__(self, job_id, repo, filename, content_type, data):
+        self.id = job_id
+        self.repo = repo
+        self.filename = filename
+        self.content_type = content_type
+        self.data = data
+        self.created_at = time.monotonic()
+        self.claimed = False
+        self.claimed_at = None
+        self.result_url = None
+        self.result_error = None
+        self.done = False
+
+
+class JobStore:
+    """Thread-safe job queue using a single Condition variable.
+
+    A single Condition guards all state transitions:
+      * upload thread waits for `claimed` then `done`
+      * poll thread waits for a pending unclaimed job to appear
+      * result thread flips `done` and wakes the upload thread
+    """
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._jobs = {}
+
+    def add(self, repo, filename, content_type, data):
+        job_id = secrets.token_hex(8)  # 16 hex chars
+        job = Job(job_id, repo, filename, content_type, data)
+        with self._cond:
+            self._jobs[job_id] = job
+            self._cond.notify_all()
+        return job
+
+    def get(self, job_id):
+        with self._cond:
+            return self._jobs.get(job_id)
+
+    def remove(self, job_id):
+        with self._cond:
+            self._jobs.pop(job_id, None)
+
+    def claim_next(self, deadline):
+        """Block until an unclaimed pending job exists, then claim+return it.
+
+        Returns the Job, or None if `deadline` (monotonic time) passes first.
+        """
+        with self._cond:
+            while True:
+                for job in self._jobs.values():
+                    if not job.claimed and not job.done:
+                        job.claimed = True
+                        job.claimed_at = time.monotonic()
+                        self._cond.notify_all()  # wake the waiting uploader
+                        return job
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._cond.wait(timeout=remaining)
+
+    def wait_for_result(self, job, result_deadline, claim_deadline):
+        """Block until the job is done. Returns a status tuple:
+
+            ("ok", url)        -> extension uploaded successfully
+            ("error", msg)     -> extension reported a failure
+            ("unclaimed", None)-> no extension claimed the job in time
+            ("timeout", None)  -> claimed but no result before result_deadline
+        """
+        with self._cond:
+            while True:
+                if job.done:
+                    if job.result_error is not None:
+                        return ("error", job.result_error)
+                    return ("ok", job.result_url)
+                now = time.monotonic()
+                if not job.claimed and now >= claim_deadline:
+                    return ("unclaimed", None)
+                if now >= result_deadline:
+                    return ("timeout", None)
+                # Wait until the next relevant deadline.
+                next_deadline = result_deadline if job.claimed else claim_deadline
+                self._cond.wait(timeout=max(0.0, next_deadline - now))
+
+    def set_result(self, job_id, url=None, error=None):
+        with self._cond:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return False
+            job.result_url = url
+            job.result_error = error
+            job.done = True
+            self._cond.notify_all()
+            return True
+
+
+# ---------------------------------------------------------------------------
+# Multipart parsing (via the `email` package — NOT the removed `cgi` module).
+# ---------------------------------------------------------------------------
+
+def parse_multipart(content_type_header, body):
+    """Parse a multipart/form-data body.
+
+    Returns dict: name -> {"value": bytes, "filename": str|None,
+                           "content_type": str|None}
+    """
+    header = (
+        b"Content-Type: " + content_type_header.encode("latin-1")
+        + b"\r\nMIME-Version: 1.0\r\n\r\n"
+    )
+    msg = BytesParser(policy=email_default_policy).parsebytes(header + body)
+    fields = {}
+    if not msg.is_multipart():
+        return fields
+    for part in msg.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if name is None:
+            continue
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            payload = b""
+        fields[name] = {
+            "value": payload,
+            "filename": part.get_filename(),
+            "content_type": part.get_content_type(),
+        }
+    return fields
+
+
+def guess_content_type(filename, fallback="application/octet-stream"):
+    if filename:
+        guessed, _ = mimetypes.guess_type(filename)
+        if guessed:
+            return guessed
+    return fallback
+
+
+# ---------------------------------------------------------------------------
+# HTTP handler.
+# ---------------------------------------------------------------------------
+
+class GhshotHandler(BaseHTTPRequestHandler):
+    server_version = "ghshot-bridge/" + VERSION
+    protocol_version = "HTTP/1.1"
+
+    # injected by the server factory below
+    token = None
+    store = None
+
+    # -- helpers ------------------------------------------------------------
+
+    def _send_json(self, status, obj):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_text(self, status, text, content_type="text/plain; charset=utf-8"):
+        body = text.encode("utf-8") if isinstance(text, str) else text
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_empty(self, status):
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _origin_ok(self):
+        """Reject requests originating from real websites.
+
+        A browser sends an Origin header for cross-origin fetches. Websites
+        live at http(s):// origins; the extension lives at chrome-extension://
+        (and CLI/curl sends no Origin). This blocks a malicious page from
+        driving uploads through the bridge.
+        """
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        origin = origin.strip().lower()
+        if origin.startswith("http://") or origin.startswith("https://"):
+            return False
+        return True
+
+    def _auth_ok(self):
+        # constant-time comparison to avoid a token timing oracle
+        return secrets.compare_digest(
+            self.headers.get(TOKEN_HEADER) or "", self.token or ""
+        )
+
+    def _content_length(self):
+        try:
+            return int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            return -1
+
+    def _read_body(self):
+        length = self._content_length()
+        if length < 0:
+            raise ValueError("invalid Content-Length")
+        if length > MAX_BODY_BYTES:
+            raise ValueError("body too large")
+        if length == 0:
+            return b""
+        return self.rfile.read(length)
+
+    def _drain_body(self):
+        # Read and discard any body so the connection can be reused.
+        length = self._content_length()
+        if length > 0:
+            self.rfile.read(min(length, MAX_BODY_BYTES))
+
+    # -- routing ------------------------------------------------------------
+
+    def do_GET(self):
+        if not self._origin_ok():
+            return self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden origin"})
+        path = urlparse(self.path).path
+
+        if path == "/healthz":
+            # No auth required — the CLI uses this to detect the bridge.
+            return self._send_json(HTTPStatus.OK, {"ok": True, "version": VERSION})
+
+        if not self._auth_ok():
+            return self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid token"})
+
+        if path == "/v1/poll":
+            return self._handle_poll()
+
+        if path.startswith("/v1/blob/"):
+            return self._handle_blob(path[len("/v1/blob/"):])
+
+        return self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    def do_POST(self):
+        if not self._origin_ok():
+            self._drain_body()
+            return self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden origin"})
+
+        if not self._auth_ok():
+            self._drain_body()
+            return self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid token"})
+
+        path = urlparse(self.path).path
+
+        if path == "/v1/upload":
+            return self._handle_upload()
+
+        if path == "/v1/result":
+            return self._handle_result()
+
+        self._drain_body()
+        return self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    # -- endpoint implementations ------------------------------------------
+
+    def _handle_upload(self):
+        ctype = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in ctype.lower():
+            self._drain_body()
+            return self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "expected multipart/form-data"},
+            )
+        try:
+            body = self._read_body()
+        except ValueError as exc:
+            status = (HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+                      if "too large" in str(exc) else HTTPStatus.BAD_REQUEST)
+            return self._send_json(status, {"error": str(exc)})
+        try:
+            fields = parse_multipart(ctype, body)
+        except Exception as exc:  # noqa: BLE001 - report parse failures clearly
+            return self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "could not parse multipart body: %s" % exc},
+            )
+
+        repo_field = fields.get("repo")
+        file_field = fields.get("file")
+        if repo_field is None or file_field is None:
+            return self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "missing required fields: repo and file"},
+            )
+
+        repo = repo_field["value"].decode("utf-8", "replace").strip()
+        if not REPO_RE.match(repo):
+            return self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "repo must be in owner/name form"},
+            )
+
+        data = file_field["value"]
+        if not data:
+            return self._send_json(
+                HTTPStatus.BAD_REQUEST, {"error": "file is empty"}
+            )
+        filename = file_field.get("filename") or "image.png"
+        content_type = file_field.get("content_type")
+        if not content_type or content_type == "application/octet-stream":
+            content_type = guess_content_type(filename)
+
+        want_text = parse_qs(urlparse(self.path).query).get("format", [""])[0] == "text"
+
+        job = self.store.add(repo, filename, content_type, data)
+        self.log_event("upload job=%s repo=%s file=%s (%d bytes)"
+                       % (job.id, repo, filename, len(data)))
+        try:
+            now = time.monotonic()
+            status, payload = self.store.wait_for_result(
+                job,
+                result_deadline=now + RESULT_WAIT_SECONDS,
+                claim_deadline=now + CLAIM_WAIT_SECONDS,
+            )
+        finally:
+            self.store.remove(job.id)
+
+        if status == "ok":
+            self.log_event("upload job=%s ok url=%s" % (job.id, payload))
+            if want_text:
+                return self._send_text(HTTPStatus.OK, payload)
+            return self._send_json(HTTPStatus.OK, {"url": payload})
+
+        if status == "error":
+            self.log_event("upload job=%s error: %s" % (job.id, payload))
+            return self._send_json(HTTPStatus.BAD_GATEWAY, {"error": payload})
+
+        if status == "unclaimed":
+            self.log_event("upload job=%s no extension connected" % job.id)
+            return self._send_json(
+                HTTPStatus.GATEWAY_TIMEOUT,
+                {"error": "extension not connected — install the ghshot "
+                          "extension and keep Chrome open"},
+            )
+
+        # status == "timeout"
+        self.log_event("upload job=%s timed out waiting for result" % job.id)
+        return self._send_json(
+            HTTPStatus.GATEWAY_TIMEOUT,
+            {"error": "timed out waiting for the extension to finish the "
+                      "upload (is github.com reachable in the browser?)"},
+        )
+
+    def _handle_poll(self):
+        deadline = time.monotonic() + POLL_WAIT_SECONDS
+        job = self.store.claim_next(deadline)
+        if job is None:
+            return self._send_empty(HTTPStatus.NO_CONTENT)
+        self.log_event("poll delivered job=%s repo=%s" % (job.id, job.repo))
+        return self._send_json(HTTPStatus.OK, {
+            "id": job.id,
+            "repo": job.repo,
+            "blob": "/v1/blob/%s" % job.id,
+            "filename": job.filename,
+        })
+
+    def _handle_blob(self, job_id):
+        job = self.store.get(job_id)
+        if job is None:
+            return self._send_json(HTTPStatus.NOT_FOUND, {"error": "no such job"})
+        content_type = job.content_type or guess_content_type(job.filename)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(job.data)))
+        self.end_headers()
+        self.wfile.write(job.data)
+
+    def _handle_result(self):
+        try:
+            body = self._read_body()
+        except ValueError as exc:
+            status = (HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+                      if "too large" in str(exc) else HTTPStatus.BAD_REQUEST)
+            return self._send_json(status, {"error": str(exc)})
+        try:
+            obj = json.loads(body.decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            return self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "invalid JSON: %s" % exc},
+            )
+        job_id = obj.get("id")
+        if not job_id:
+            return self._send_json(
+                HTTPStatus.BAD_REQUEST, {"error": "missing id"}
+            )
+        if "url" in obj and obj["url"]:
+            ok = self.store.set_result(job_id, url=str(obj["url"]))
+        else:
+            err = obj.get("error") or "extension reported an unknown error"
+            ok = self.store.set_result(job_id, error=str(err))
+        if not ok:
+            return self._send_json(
+                HTTPStatus.NOT_FOUND,
+                {"error": "unknown job id (may have already timed out)"},
+            )
+        return self._send_json(HTTPStatus.OK, {"ok": True})
+
+    # -- logging ------------------------------------------------------------
+
+    def log_event(self, msg):
+        sys.stderr.write("[ghshot-bridge] %s\n" % msg)
+        sys.stderr.flush()
+
+    def log_message(self, fmt, *args):
+        # Quiet the default per-request access log; we log meaningful events
+        # explicitly via log_event(). Errors still surface via log_error().
+        return
+
+
+# ---------------------------------------------------------------------------
+# Token resolution.
+# ---------------------------------------------------------------------------
+
+def resolve_token(token_file):
+    """Return the bridge auth token.
+
+    Precedence: GHSHOT_BRIDGE_TOKEN env var > token file (auto-created).
+    """
+    env_token = os.environ.get("GHSHOT_BRIDGE_TOKEN")
+    if env_token:
+        return env_token.strip()
+
+    if os.path.exists(token_file):
+        # Tighten perms if a pre-existing token file is group/other-accessible.
+        try:
+            mode = os.stat(token_file).st_mode
+            if mode & 0o077:
+                os.chmod(token_file, 0o600)
+        except OSError:
+            pass
+        with open(token_file, "r", encoding="utf-8") as fh:
+            existing = fh.read().strip()
+        if existing:
+            return existing
+
+    # Auto-create a fresh token.
+    token = secrets.token_hex(16)  # 32 hex chars
+    directory = os.path.dirname(token_file) or "."
+    os.makedirs(directory, exist_ok=True)
+    try:
+        os.chmod(directory, 0o700)
+    except OSError:
+        pass
+    # Write with restrictive permissions from the start.
+    fd = os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(token + "\n")
+    os.chmod(token_file, 0o600)
+    return token
+
+
+# ---------------------------------------------------------------------------
+# Server bootstrap.
+# ---------------------------------------------------------------------------
+
+def build_server(port, token, store):
+    handler_cls = type("BoundGhshotHandler", (GhshotHandler,), {
+        "token": token,
+        "store": store,
+    })
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler_cls)
+    httpd.daemon_threads = True
+    return httpd
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="ghshot-bridge",
+        description="Local long-poll HTTP bridge for the ghshot Chrome "
+                    "extension. Binds 127.0.0.1 only.",
+    )
+    default_port = int(os.environ.get("GHSHOT_BRIDGE_PORT") or DEFAULT_PORT)
+    parser.add_argument(
+        "--port", type=int, default=default_port,
+        help="TCP port to bind on 127.0.0.1 "
+             "(default: $GHSHOT_BRIDGE_PORT or %d)" % DEFAULT_PORT,
+    )
+    parser.add_argument(
+        "--token-file", default=DEFAULT_TOKEN_FILE,
+        help="Path to the auth token file (default: %s). Ignored if "
+             "$GHSHOT_BRIDGE_TOKEN is set." % DEFAULT_TOKEN_FILE,
+    )
+    parser.add_argument(
+        "--print-token", action="store_true",
+        help="Print the resolved auth token and exit.",
+    )
+    args = parser.parse_args(argv)
+
+    token = resolve_token(args.token_file)
+
+    if args.print_token:
+        sys.stdout.write(token + "\n")
+        return 0
+
+    store = JobStore()
+    try:
+        httpd = build_server(args.port, token, store)
+    except OSError as exc:
+        sys.stderr.write(
+            "[ghshot-bridge] failed to bind 127.0.0.1:%d — %s\n"
+            % (args.port, exc)
+        )
+        return 1
+
+    url = "http://127.0.0.1:%d" % args.port
+    sys.stderr.write(
+        "[ghshot-bridge] v%s listening on %s\n" % (VERSION, url)
+    )
+    # Never echo the secret into logs/journald. Show it only on an interactive
+    # terminal; otherwise point at the file and the --print-token command.
+    if sys.stderr.isatty():
+        sys.stderr.write(
+            "[ghshot-bridge] In the extension options set:\n"
+            "                  Bridge URL: %s\n"
+            "                  Token:      %s\n"
+            % (url, token)
+        )
+    else:
+        sys.stderr.write(
+            "[ghshot-bridge] In the extension options set Bridge URL: %s\n"
+            "[ghshot-bridge] Reveal the token with: ghshot-bridge --print-token\n"
+            % url
+        )
+    sys.stderr.write(
+        "[ghshot-bridge] (token stored at %s — keep it private)\n"
+        % args.token_file
+    )
+    sys.stderr.flush()
+
+    stop = threading.Event()
+
+    def handle_sigint(signum, frame):  # noqa: ARG001
+        sys.stderr.write("\n[ghshot-bridge] shutting down...\n")
+        sys.stderr.flush()
+        stop.set()
+        # shutdown() must be called from a different thread than serve_forever.
+        threading.Thread(target=httpd.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGINT, handle_sigint)
+    signal.signal(signal.SIGTERM, handle_sigint)
+
+    try:
+        httpd.serve_forever(poll_interval=0.5)
+    finally:
+        httpd.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

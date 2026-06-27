@@ -1,0 +1,33 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Shell — formatted with `shfmt -i 2 -ci`
+[*.sh]
+indent_size = 2
+
+[tests/stubs/*]
+indent_size = 2
+
+# Python bridge — PEP 8
+[*.py]
+indent_size = 4
+
+[bridge/ghshot-bridge]
+indent_size = 4
+
+# Markdown — keep trailing whitespace meaningful (hard line breaks)
+[*.md]
+trim_trailing_whitespace = false
+
+[Makefile]
+indent_style = tab
+
+[*.{yml,yaml}]
+indent_size = 2
