@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 #
-# Hermetic tests for skills/ghshot/ghshot.sh.
-# No network: `gh` is replaced by a stub in tests/stubs; the bridge is forced
-# unhealthy so the attachments backend never auto-selects.
+# Hermetic tests for skills/ghshot/ghshot.sh (attachments-only).
+# No network: `gh` and `curl` are replaced by stubs in tests/stubs. The fake
+# curl makes the bridge look healthy and returns a canned user-attachments URL.
 
 setup() {
   SCRIPT="${BATS_TEST_DIRNAME}/../skills/ghshot/ghshot.sh"
@@ -10,37 +10,38 @@ setup() {
   PATH="${STUBS}:${PATH}"
   export PATH
 
-  # Clean any ambient ghshot config so tests are deterministic.
-  unset GHSHOT_BACKEND GHSHOT_PUBLIC GHSHOT_FORCE GHSHOT_MAX_BYTES GHSHOT_REPO
-  export GHSHOT_ASSUME_YES=1
-  # Force the bridge unhealthy so auto-detection lands on release.
-  export GHSHOT_BRIDGE_URL=http://127.0.0.1:1
-
   TMP="$(mktemp -d)"
+  # Isolate HOME so the real ~/.config/ghshot/bridge-token is never read.
+  export HOME="$TMP"
+
+  # Clean ambient config; provide a bridge token so uploads proceed.
+  unset GHSHOT_FORCE GHSHOT_MAX_BYTES GHSHOT_REPO CURL_STUB_UNHEALTHY \
+    CURL_STUB_UPLOAD_FAIL CURL_STUB_BADRESP CURL_STUB_URL GH_STUB_AUTH_FAIL
+  export GHSHOT_BRIDGE_TOKEN=testtoken
+  export GHSHOT_BRIDGE_URL=http://127.0.0.1:41330
+
   IMG="${TMP}/shot.png"
   IMG2="${TMP}/two.png"
-  # Minimal valid PNG signature — content does not matter to the script.
+  # Minimal valid PNG signature — content does not matter to the script/stubs.
   printf '\x89PNG\r\n\x1a\n' >"$IMG"
-  printf '\x89PNG\r\n\x1a\n' >"$IMG2"
+  cp "$IMG" "$IMG2"
 }
 
-teardown() {
-  [ -n "${TMP:-}" ] && rm -rf "$TMP"
-}
+teardown() { rm -rf "$TMP"; }
 
-# ---- meta / arg parsing ----------------------------------------------------
+# ---- flags / validation ----------------------------------------------------
 
 @test "--version prints version" {
   run bash "$SCRIPT" --version
   [ "$status" -eq 0 ]
-  [ "$output" = "ghshot 0.1.0" ]
+  [[ "$output" == "ghshot "* ]]
 }
 
 @test "--help prints usage and exits 0" {
   run bash "$SCRIPT" --help
   [ "$status" -eq 0 ]
-  [[ "$output" == *"upload images to GitHub"* ]]
-  [[ "$output" == *"--backend"* ]]
+  [[ "$output" == *"browser session"* ]]
+  [[ "$output" == *"--pr N"* ]]
 }
 
 @test "no image given is an error" {
@@ -50,12 +51,10 @@ teardown() {
 }
 
 @test "unknown flag is rejected" {
-  run bash "$SCRIPT" --definitely-not-a-flag "$IMG"
+  run bash "$SCRIPT" --nope "$IMG"
   [ "$status" -ne 0 ]
   [[ "$output" == *"unknown flag"* ]]
 }
-
-# ---- numeric validation ----------------------------------------------------
 
 @test "--pr requires a number" {
   run bash "$SCRIPT" --pr abc "$IMG"
@@ -64,31 +63,29 @@ teardown() {
 }
 
 @test "--issue requires a number" {
-  run bash "$SCRIPT" --issue x12 "$IMG"
+  run bash "$SCRIPT" --issue "$IMG"
   [ "$status" -ne 0 ]
   [[ "$output" == *"needs a number"* ]]
 }
 
 @test "GHSHOT_MAX_BYTES must be an integer" {
-  run env GHSHOT_MAX_BYTES=notanumber bash "$SCRIPT" "$IMG"
+  run env GHSHOT_MAX_BYTES=big bash "$SCRIPT" "$IMG"
   [ "$status" -ne 0 ]
   [[ "$output" == *"must be an integer"* ]]
 }
 
-# ---- vet_file guards -------------------------------------------------------
+# ---- content guards --------------------------------------------------------
 
 @test "refuses sensitive-looking filename" {
-  s="${TMP}/.env"
-  printf 'SECRET=1\n' >"$s"
-  run bash "$SCRIPT" "$s"
+  cp "$IMG" "$TMP/.env"
+  run bash "$SCRIPT" "$TMP/.env"
   [ "$status" -ne 0 ]
   [[ "$output" == *"sensitive-looking"* ]]
 }
 
 @test "refuses non-image extension" {
-  t="${TMP}/notes.txt"
-  printf 'hello\n' >"$t"
-  run bash "$SCRIPT" "$t"
+  cp "$IMG" "$TMP/notes.txt"
+  run bash "$SCRIPT" "$TMP/notes.txt"
   [ "$status" -ne 0 ]
   [[ "$output" == *"not an image"* ]]
 }
@@ -100,91 +97,77 @@ teardown() {
 }
 
 @test "--force bypasses the non-image guard" {
-  t="${TMP}/notes.txt"
-  printf 'hello\n' >"$t"
-  run bash "$SCRIPT" --force "$t"
+  cp "$IMG" "$TMP/notes.txt"
+  run bash "$SCRIPT" --force "$TMP/notes.txt"
   [ "$status" -eq 0 ]
+  [[ "$output" == *"user-attachments/assets/"* ]]
 }
 
 @test "missing file is an error" {
-  run bash "$SCRIPT" "${TMP}/nope.png"
+  run bash "$SCRIPT" "$TMP/nope.png"
   [ "$status" -ne 0 ]
   [[ "$output" == *"file not found"* ]]
 }
 
-# ---- release backend output (default) --------------------------------------
+# ---- happy path (bridge stub) ----------------------------------------------
 
-@test "default backend is release and emits a github URL" {
-  run bash "$SCRIPT" --json "$IMG"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *'"backend":"release"'* ]]
-  [[ "$output" == *'"url":"https://github.com/octocat/ghshot-images/releases/download/'* ]]
-  [[ "$output" == *'"visibility":"private"'* ]]
-}
-
-@test "private release renders as a link (not inline)" {
+@test "emits inline user-attachments markdown" {
   run bash "$SCRIPT" "$IMG"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"](https://github.com/"* ]]
-  [[ "$output" != *"!["* ]]
-}
-
-@test "--public release renders inline image markdown" {
-  run bash "$SCRIPT" --public "$IMG"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"![shot](https://github.com/"* ]]
+  [[ "$output" == '![shot](https://github.com/user-attachments/assets/'* ]]
 }
 
 @test "--raw prints a bare URL, no markdown" {
   run bash "$SCRIPT" --raw "$IMG"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"https://github.com/octocat/ghshot-images/"* ]]
-  [[ "$output" != *"!["* ]]
-  [[ "$output" != *"]("* ]]
+  [[ "$output" == https://github.com/user-attachments/assets/* ]]
+  [[ "$output" != *'!['* ]]
+}
+
+@test "--json reports visibility private and a url" {
+  run bash "$SCRIPT" --json "$IMG"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"visibility":"private"'* ]]
+  [[ "$output" == *'"url":"https://github.com/user-attachments/assets/'* ]]
 }
 
 @test "multiple images produce one markdown line each" {
-  run bash "$SCRIPT" --public "$IMG" "$IMG2"
+  run bash "$SCRIPT" "$IMG" "$IMG2"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"![shot](https://github.com/"* ]]
-  [[ "$output" == *"![two](https://github.com/"* ]]
+  lines_count=$(printf '%s\n' "$output" | grep -c '^!\[')
+  [ "$lines_count" -eq 2 ]
 }
 
-@test "--pr posts a comment via gh stub" {
-  run bash "$SCRIPT" --pr 42 "$IMG"
+@test "--pr posts a comment via the gh stub; stdout stays clean" {
+  GH_LOG="$TMP/gh.log"
+  run env GH_STUB_LOG="$GH_LOG" bash "$SCRIPT" --pr 42 "$IMG"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"commented on pr #42"* ]]
+  grep -q 'pr comment 42' "$GH_LOG"
 }
 
-@test "gh auth failure is reported for release backend" {
+# ---- bridge / dependency failure modes -------------------------------------
+
+@test "bridge down is reported clearly" {
+  run env CURL_STUB_UNHEALTHY=1 bash "$SCRIPT" "$IMG"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"bridge not reachable"* ]]
+}
+
+@test "missing bridge token is reported" {
+  unset GHSHOT_BRIDGE_TOKEN
+  run bash "$SCRIPT" "$IMG"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no bridge token"* ]]
+}
+
+@test "a non-URL response from the bridge fails loudly" {
+  run env CURL_STUB_BADRESP=1 bash "$SCRIPT" "$IMG"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unexpected response"* ]]
+}
+
+@test "gh auth failure is reported when resolving the repo" {
   run env GH_STUB_AUTH_FAIL=1 bash "$SCRIPT" "$IMG"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"gh not authenticated"* ]]
-}
-
-# ---- backend selection / precedence ----------------------------------------
-
-@test "explicit --backend release is honored" {
-  run bash "$SCRIPT" --backend release --json "$IMG"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *'"backend":"release"'* ]]
-}
-
-@test "GHSHOT_BACKEND env selects the backend" {
-  run env GHSHOT_BACKEND=release bash "$SCRIPT" --json "$IMG"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *'"backend":"release"'* ]]
-}
-
-@test "auto-selects release when no bridge is running" {
-  # GHSHOT_BRIDGE_URL points at an unused port so bridge_healthy fails fast
-  run env GHSHOT_BRIDGE_URL=http://127.0.0.1:1 bash "$SCRIPT" --json "$IMG"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *'"backend":"release"'* ]]
-}
-
-@test "unknown backend is rejected" {
-  run bash "$SCRIPT" --backend bogus "$IMG"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"unknown backend"* ]]
+  [[ "$output" == *"not authenticated"* ]]
 }

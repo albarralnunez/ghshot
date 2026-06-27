@@ -36,7 +36,7 @@ Run the same checks CI runs before pushing:
 
 ```bash
 # shell
-shellcheck skills/ghshot/ghshot.sh tests/stubs/gh
+shellcheck skills/ghshot/ghshot.sh tests/stubs/gh tests/stubs/curl
 shfmt -d -i 2 -ci skills/ghshot/ghshot.sh        # -d = diff only; drop -d to format
 
 # python bridge

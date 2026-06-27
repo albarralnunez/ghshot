@@ -20,15 +20,11 @@ body:
         - Docs / other
     validations:
       required: true
-  - type: dropdown
-    id: backend
+  - type: input
+    id: component
     attributes:
-      label: Backend
-      description: Which backend were you using (if relevant)?
-      options:
-        - "not applicable"
-        - attachments
-        - release
+      label: Component
+      description: Which part? (skill / bridge / extension — if relevant)
     validations:
       required: false
   - type: textarea
@@ -68,7 +64,7 @@ body:
     attributes:
       label: Checks
       options:
-        - label: I confirmed `gh auth status` is OK (for the release backend or when commenting).
+        - label: I confirmed the bridge is running and the extension is signed in to github.com.
           required: false
         - label: I did not include any secrets, tokens, or private images in this report.
           required: true

@@ -19,7 +19,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck skills/ghshot/ghshot.sh tests/stubs/gh
+          shellcheck skills/ghshot/ghshot.sh tests/stubs/gh tests/stubs/curl
 
       - name: shfmt -d -i 2 -ci
         run: |

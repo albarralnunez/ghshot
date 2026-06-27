@@ -11,14 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **CLI skill** (`skills/ghshot/ghshot.sh`): dependency-free bash script that uploads
-  images to GitHub PRs/issues/comments and prints markdown-ready URLs.
-  - `attachments` backend — **true-private + inline** uploads via the user's existing
-    github.com browser session, auto-selected when the bridge is healthy.
-  - `release` backend — GitHub release assets on a dedicated `<you>/ghshot-images` repo,
-    **private by default** (emitted as a link), `--public` for inline rendering.
-  - Flags: `--pr`, `--issue`, `--backend`, `--public`, `--private`, `--raw`, `--json`,
-    `--force`, `--yes`, `--version`, `--help`.
+- **CLI skill** (`skills/ghshot/ghshot.sh`): bash script that uploads images to GitHub
+  PRs/issues/comments and prints markdown-ready URLs. **True-private + inline** uploads via
+  the user's existing github.com browser session (through the bridge + extension) — the
+  asset is access-controlled to people who can see the repo; works on private repos.
+  - Flags: `--pr`, `--issue`, `--raw`, `--json`, `--force`, `--version`, `--help`.
   - Refuse-by-default guards for sensitive-looking filenames, non-images, and oversize files.
 - **Bridge** (`bridge/ghshot-bridge`): single python3-stdlib loopback HTTP service that
   brokers upload jobs between the CLI and the extension. Binds 127.0.0.1, token auth,

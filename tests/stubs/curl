@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Hermetic fake `curl` for the ghshot bats tests. NO network.
+#
+# Recognizes the two calls ghshot makes to the bridge by URL substring:
+#   .../healthz        -> bridge health probe
+#   .../v1/upload...   -> image upload, returns a user-attachments URL
+#
+# Tunable via env:
+#   CURL_STUB_UNHEALTHY=1     /healthz exits non-zero (bridge "down")
+#   CURL_STUB_UPLOAD_FAIL=1   /v1/upload exits non-zero (curl -f style failure)
+#   CURL_STUB_BADRESP=1       /v1/upload prints a non-URL body
+#   CURL_STUB_URL=...         override the returned URL
+set -u
+
+args="$*"
+
+case "$args" in
+  *"/healthz"*)
+    [ "${CURL_STUB_UNHEALTHY:-0}" = 1 ] && exit 7
+    printf '{"ok":true,"version":"0.1.0"}'
+    exit 0
+    ;;
+  *"/v1/upload"*)
+    [ "${CURL_STUB_UPLOAD_FAIL:-0}" = 1 ] && exit 22
+    if [ "${CURL_STUB_BADRESP:-0}" = 1 ]; then
+      printf 'not connected'
+      exit 0
+    fi
+    printf '%s' "${CURL_STUB_URL:-https://github.com/user-attachments/assets/deadbeef-0000}"
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac

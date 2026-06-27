@@ -24,15 +24,12 @@ When reporting, include:
 
 ## Security model (what ghshot does and does not protect)
 
-- **attachments backend** — the only backend with *true access control*. Uploads go
-  through your existing, authenticated github.com browser session to the
-  `user-attachments` endpoint; the asset inherits the repository's ACL. **No cookies are
-  extracted and no GitHub credential is stored on disk.** The only local secret is the
-  bridge token (`~/.config/ghshot/bridge-token`, chmod 0600), which only authorizes the
-  loopback bridge.
-- **public release backend** (`--public`) — *security by obscurity*. URLs are unguessable
-  but **not** access-controlled; anyone with the link can view the image.
-- **Never upload secrets.** The CLI refuses sensitive-looking filenames and non-image
+- **True access control.** Uploads go through your existing, authenticated github.com
+  browser session to the `user-attachments` endpoint; the asset inherits the repository's
+  ACL — only people who can see the repo can view the image. **No cookies are extracted
+  and no GitHub credential is stored on disk.** The only local secret is the bridge token
+  (`~/.config/ghshot/bridge-token`, chmod 0600), which only authorizes the loopback bridge.
+- **Never upload secrets** anyway. The CLI refuses sensitive-looking filenames and non-image
   files by default; `--force` bypasses that guard.
 
 ## Bridge hardening
