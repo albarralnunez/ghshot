@@ -1,15 +1,12 @@
 {
   "manifest_version": 3,
   "name": "ghshot",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Uploads images to GitHub user-attachments through your existing github.com session so they render inline even on private repos.",
-  "permissions": ["storage", "alarms"],
+  "permissions": ["storage", "alarms", "scripting", "tabs"],
   "host_permissions": [
     "https://github.com/*",
-    "http://127.0.0.1/*",
-    "http://10.*/*",
-    "http://192.168.*/*",
-    "http://100.*/*"
+    "http://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "background.js"

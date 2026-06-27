@@ -102,8 +102,9 @@ origin-guarded**, but is now reachable on the chosen interface — only bind an 
 
 The extension supports **multiple bridges** at once — add as many URL+token pairs as you
 like (e.g. a local `127.0.0.1` bridge and a remote one); it polls them all and handles
-whichever has a job. Make sure the bridge's address falls under the extension's host
-permissions (loopback and the common private ranges are included).
+whichever has a job. (The extension reaches a bridge at any address via the bridge's own
+CORS headers, so a remote bridge needs no extra extension permission — just a reachable
+URL and its token.)
 
 ## Quickstart
 

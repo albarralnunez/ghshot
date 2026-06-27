@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-27
+
+### Fixed
+
+- **Extension uploads now work on private repos / with third-party cookies blocked.**
+  The upload previously ran a cross-site `fetch` from the service worker; Chrome strips
+  github.com's `SameSite` session cookies from that request when third-party cookies are
+  blocked (increasingly the default), so GitHub served a logged-out page and the extension
+  reported "not signed in". The upload now runs **inside a github.com tab** via
+  `chrome.scripting.executeScript`, where requests are first-party and always carry the
+  user's session. Adds the `scripting` + `tabs` permissions; reuses an existing github.com
+  tab when present, otherwise opens (and closes) a background one.
+- **Updated the GitHub HTML scraping** to current markup: `repository_id` from the
+  `octolytics-dimension-repository_id` meta and the upload token from the page's
+  `"uploadToken"` payload (with `/issues/new` + `csrf-token` fallbacks). The old
+  `data-upload-*` selectors no longer exist and matched nothing, which also produced the
+  misleading "not signed in" error. The sign-in check now reads the `user-login` meta.
+
 ## [0.2.1] - 2026-06-27
 
 ### Changed
@@ -67,7 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CI (shellcheck, shfmt, py_compile, bats on Ubuntu + macOS), issue/PR templates,
   dependabot, and hermetic bats tests with a `gh` stub.
 
-[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/albarralnunez/ghshot/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/albarralnunez/ghshot/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/albarralnunez/ghshot/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/albarralnunez/ghshot/compare/v0.1.0...v0.1.1

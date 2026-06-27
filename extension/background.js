@@ -1,16 +1,18 @@
 // ghshot background service worker (MV3).
 //
 // Responsibilities:
-//   1. Long-poll the local ghshot bridge (127.0.0.1) for upload jobs.
+//   1. Long-poll the configured ghshot bridge(s) for upload jobs.
 //   2. For each job, fetch the image blob from the bridge and upload it to
 //      GitHub's user-attachments storage using THIS browser's authenticated
-//      github.com session (credentials: "include"). No cookie extraction, no
-//      stored token — the upload rides the user's real login.
+//      github.com session. The upload runs INSIDE a github.com tab (via
+//      chrome.scripting.executeScript), so the requests are first-party to
+//      github.com and carry the user's real session cookies — this works on
+//      private repos and is not affected by third-party-cookie blocking, which
+//      strips cookies from a service-worker cross-site fetch.
 //   3. Report the resulting inline URL (or an error) back to the bridge.
 //
-// MV3 service workers are killed when idle, so the poll loop is (re)started
-// from onInstalled, onStartup, and a 1-minute alarm. The loop guards against
-// running more than once concurrently.
+// MV3 service workers are killed when idle, so the poll loops are (re)started
+// from onInstalled, onStartup, a 1-minute alarm, and storage changes.
 
 "use strict";
 
@@ -20,160 +22,211 @@ const POLL_PATH = "/v1/poll";
 const RESULT_PATH = "/v1/result";
 const NETWORK_RETRY_MS = 3000;
 
-// ---------------------------------------------------------------------------
-// GitHub user-attachments upload.
-//
-// WARNING: This endpoint flow is UNDOCUMENTED and reverse-engineered from the
-// github.com web UI's drag-and-drop image upload. GitHub may change the HTML
-// attributes, field names, or the multi-step protocol at any time; if uploads
-// start failing, re-inspect the network traffic of a manual image paste on a
-// repo page and adjust the constants below.
-// ---------------------------------------------------------------------------
-
-// Regexes used to scrape the authenticated repo page for the upload secrets.
-const RE_REPOSITORY_ID = [
-  /name="repository_id"[^>]*\bvalue="(\d+)"/,
-  /\bdata-upload-repository-id="(\d+)"/,
-];
-const RE_UPLOAD_POLICY_URL = /\bdata-upload-policy-url="([^"]+)"/;
-const RE_UPLOAD_POLICY_TOKEN = [
-  /\bdata-upload-policy-authenticity-token="([^"]+)"/,
-  /name="authenticity_token"[^>]*\bvalue="([^"]+)"/,
-];
-const RE_LOGIN_FORM = /<form[^>]+action="\/session"/i;
-
-const DEFAULT_UPLOAD_POLICY_URL = "/upload/policies/assets";
-const GITHUB_ORIGIN = "https://github.com";
-
-// Multipart field names sent to the policy endpoint (step 2).
-const POLICY_FIELDS = {
-  name: "name",
-  size: "size",
-  contentType: "content_type",
-  repositoryId: "repository_id",
-  authenticityToken: "authenticity_token",
-};
-
-function firstMatch(text, patterns) {
-  const list = Array.isArray(patterns) ? patterns : [patterns];
-  for (const re of list) {
-    const m = text.match(re);
-    if (m && m[1]) return m[1];
-  }
-  return null;
-}
-
-function guessContentType(filename, blob) {
-  if (blob && blob.type) return blob.type;
-  const lower = (filename || "").toLowerCase();
-  if (lower.endsWith(".png")) return "image/png";
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-  if (lower.endsWith(".gif")) return "image/gif";
-  if (lower.endsWith(".webp")) return "image/webp";
-  if (lower.endsWith(".svg")) return "image/svg+xml";
-  return "application/octet-stream";
-}
-
-// Performs the full GitHub user-attachments upload and returns the final
-// github.com/user-attachments/assets/<uuid> href. Throws an Error on any
-// failure with an explicit message.
 const RE_REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/;
 
-async function uploadToGitHub(repo, blob, filename) {
-  // Defense in depth: the bridge already validates this, but never build a
-  // github.com URL from an unvalidated repo string.
-  if (!RE_REPO.test(repo)) {
-    throw new Error(`invalid repo "${repo}" (expected owner/name)`);
-  }
-  // Step 1: scrape the authenticated repo page for upload secrets.
-  console.debug("[ghshot] step 1: fetching repo page for", repo);
-  const [repoOwner, repoName] = repo.split("/");
-  const pageUrl = `${GITHUB_ORIGIN}/${encodeURIComponent(repoOwner)}/${encodeURIComponent(repoName)}`;
-  const pageResp = await fetch(pageUrl, {
-    credentials: "include",
-    headers: { Accept: "text/html" },
+// ---------------------------------------------------------------------------
+// GitHub user-attachments upload — driven from a github.com tab.
+//
+// WARNING: This endpoint flow is UNDOCUMENTED and reverse-engineered from the
+// github.com web UI's image upload. If uploads start failing, re-inspect the
+// network traffic of a manual image paste on a repo page and adjust pageUpload.
+// ---------------------------------------------------------------------------
+
+function blobToBase64(blob) {
+  return blob.arrayBuffer().then((buf) => {
+    const bytes = new Uint8Array(buf);
+    let s = "";
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      s += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(s);
   });
-  if (!pageResp.ok) {
-    throw new Error(`failed to load ${pageUrl}: HTTP ${pageResp.status}`);
-  }
-  const html = await pageResp.text();
+}
 
-  const repositoryId = firstMatch(html, RE_REPOSITORY_ID);
-  if (!repositoryId || RE_LOGIN_FORM.test(html)) {
-    throw new Error("not signed in to github.com in this browser");
-  }
-  const policyUrl = firstMatch(html, RE_UPLOAD_POLICY_URL) || DEFAULT_UPLOAD_POLICY_URL;
-  const policyToken = firstMatch(html, RE_UPLOAD_POLICY_TOKEN);
-  if (!policyToken) {
-    throw new Error("could not find upload authenticity token on repo page");
-  }
-  const contentType = guessContentType(filename, blob);
-  console.debug("[ghshot] step 1 ok: repositoryId=%s policyUrl=%s", repositoryId, policyUrl);
-
-  // Step 2: ask GitHub for an upload policy (S3 form fields + asset href).
-  console.debug("[ghshot] step 2: requesting upload policy");
-  const policyForm = new FormData();
-  policyForm.append(POLICY_FIELDS.name, filename);
-  policyForm.append(POLICY_FIELDS.size, String(blob.size));
-  policyForm.append(POLICY_FIELDS.contentType, contentType);
-  policyForm.append(POLICY_FIELDS.repositoryId, repositoryId);
-  policyForm.append(POLICY_FIELDS.authenticityToken, policyToken);
-
-  const policyResp = await fetch(`${GITHUB_ORIGIN}${policyUrl}`, {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "X-Requested-With": "XMLHttpRequest",
-      Accept: "application/json",
-    },
-    body: policyForm,
+function waitTabComplete(tabId) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    };
+    const listener = (id, info) => {
+      if (id === tabId && info.status === "complete") finish();
+    };
+    // Attach the listener BEFORE the status re-check to avoid missing a
+    // "complete" event fired in between (race / hang).
+    chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.get(tabId, (t) => {
+      if (chrome.runtime.lastError || (t && t.status === "complete")) finish();
+    });
+    setTimeout(finish, 15000); // never hang forever
   });
-  if (!policyResp.ok) {
-    const detail = await policyResp.text().catch(() => "");
-    throw new Error(`upload policy request failed: HTTP ${policyResp.status} ${detail.slice(0, 200)}`);
-  }
-  const p = await policyResp.json();
-  if (!p || !p.upload_url || !p.form || !p.asset || !p.asset.href) {
-    throw new Error("upload policy response missing expected fields");
-  }
-  console.debug("[ghshot] step 2 ok: asset href=%s", p.asset.href);
+}
 
-  // Step 3: POST the bytes to the S3 (no github credentials here).
-  console.debug("[ghshot] step 3: uploading bytes to storage");
-  const s3Form = new FormData();
-  for (const [key, value] of Object.entries(p.form)) {
-    s3Form.append(key, value);
+// Find a github.com tab (or open a background one), inject pageUpload, return
+// the asset href. Closes any tab it opened.
+async function uploadViaTab(owner, repo, base64, filename, mime) {
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: "https://github.com/*" });
+  } catch (e) {
+    tabs = [];
   }
-  s3Form.append("file", blob, filename);
-
-  const s3Resp = await fetch(p.upload_url, {
-    method: "POST",
-    body: s3Form,
-    // Deliberately NO credentials: this is a plain S3 form POST.
-  });
-  if (s3Resp.status !== 201 && s3Resp.status !== 204 && !s3Resp.ok) {
-    throw new Error(`storage upload failed: HTTP ${s3Resp.status}`);
+  let tab = tabs && tabs[0];
+  let openedId = null;
+  if (!tab) {
+    tab = await chrome.tabs.create({
+      url: `https://github.com/${owner}/${repo}`,
+      active: false,
+    });
+    openedId = tab.id;
+    await waitTabComplete(tab.id);
   }
-  console.debug("[ghshot] step 3 ok: storage accepted (HTTP %s)", s3Resp.status);
-
-  // Step 4: finalize the asset back on github.com.
-  console.debug("[ghshot] step 4: finalizing asset");
-  const finalizeForm = new FormData();
-  finalizeForm.append("authenticity_token", p.asset_upload_authenticity_token);
-
-  const finalizeResp = await fetch(`${GITHUB_ORIGIN}${p.asset_upload_url}`, {
-    method: "PUT",
-    credentials: "include",
-    headers: { Accept: "application/json" },
-    body: finalizeForm,
-  });
-  if (!finalizeResp.ok) {
-    throw new Error(`asset finalize failed: HTTP ${finalizeResp.status}`);
+  try {
+    const injection = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: pageUpload,
+      args: [owner, repo, base64, filename, mime || ""],
+    });
+    const result = injection && injection[0] && injection[0].result;
+    if (!result || !result.ok) {
+      throw new Error((result && result.error) || "upload failed in page context");
+    }
+    return result.href;
+  } finally {
+    if (openedId !== null) {
+      try {
+        await chrome.tabs.remove(openedId);
+      } catch (e) {
+        /* ignore */
+      }
+    }
   }
-  console.debug("[ghshot] step 4 ok: asset finalized");
+}
 
-  // Step 5: the asset href renders inline and is access-controlled to the repo.
-  return p.asset.href;
+// Runs INSIDE github.com (first-party). MUST be fully self-contained — it is
+// serialized and injected, so it may not reference any outer-scope identifier.
+async function pageUpload(owner, repo, base64, filename, mime) {
+  try {
+    const bin = atob(base64);
+    const u = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    const ctype = mime || "application/octet-stream";
+    const blob = new Blob([u], { type: ctype });
+
+    const m1 = (s, re) => {
+      const m = s.match(re);
+      return m ? m[1] : null;
+    };
+
+    // Fetch the repo page same-origin (carries the session cookies regardless
+    // of third-party-cookie policy).
+    const pageResp = await fetch(`/${owner}/${repo}`, {
+      credentials: "include",
+      headers: { Accept: "text/html" },
+    });
+    const html = await pageResp.text();
+    const signedIn = /<meta name="user-login" content="[^"]+"/.test(html);
+    if (pageResp.status === 404 || /\/login(\?|$)/.test(pageResp.url) || !signedIn) {
+      return { ok: false, error: `not signed in to github.com, or no access to ${owner}/${repo}` };
+    }
+
+    const repoId =
+      m1(html, /name="octolytics-dimension-repository_id"\s+content="(\d+)"/) ||
+      m1(html, /name="hovercard-subject-tag"\s+content="repository:(\d+)"/) ||
+      m1(html, /\bdata-upload-repository-id="(\d+)"/) ||
+      m1(html, /name="repository_id"[^>]*\bvalue="(\d+)"/);
+
+    let uploadToken =
+      m1(html, /"uploadToken":"([^"]+)"/) ||
+      m1(html, /\bdata-upload-policy-authenticity-token="([^"]+)"/) ||
+      m1(html, /<meta name="csrf-token" content="([^"]+)"/);
+
+    // Fallback: a comment form (issues/new) reliably carries an upload token.
+    if (repoId && !uploadToken) {
+      try {
+        const alt = await (await fetch(`/${owner}/${repo}/issues/new`, {
+          credentials: "include",
+          headers: { Accept: "text/html" },
+        })).text();
+        uploadToken =
+          m1(alt, /"uploadToken":"([^"]+)"/) ||
+          m1(alt, /name="authenticity_token"[^>]*\bvalue="([^"]+)"/) ||
+          m1(alt, /<meta name="csrf-token" content="([^"]+)"/);
+      } catch (e) {
+        /* ignore */
+      }
+    }
+
+    if (!repoId || !uploadToken) {
+      return { ok: false, error: "could not find upload tokens on the repo page (GitHub HTML changed)" };
+    }
+
+    const fetchNonce = m1(html, /name="fetch-nonce" content="([^"]+)"/);
+    const release = m1(html, /name="release" content="([^"]+)"/);
+
+    // Step 1: request an upload policy.
+    const policyForm = new FormData();
+    policyForm.append("name", filename);
+    policyForm.append("size", String(blob.size));
+    policyForm.append("content_type", ctype);
+    policyForm.append("repository_id", repoId);
+    policyForm.append("authenticity_token", uploadToken);
+    const policyHeaders = { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" };
+    if (fetchNonce) {
+      policyHeaders["GitHub-Verified-Fetch"] = "true";
+      policyHeaders["X-Fetch-Nonce"] = fetchNonce;
+    }
+    if (release) policyHeaders["X-GitHub-Client-Version"] = release;
+
+    const policyResp = await fetch("/upload/policies/assets", {
+      method: "POST",
+      credentials: "include",
+      headers: policyHeaders,
+      body: policyForm,
+    });
+    if (!policyResp.ok) {
+      const detail = await policyResp.text().catch(() => "");
+      return { ok: false, error: `upload policy failed: HTTP ${policyResp.status} ${detail.slice(0, 200)}` };
+    }
+    const p = await policyResp.json();
+    if (!p || !p.upload_url || !p.form || !p.asset || !p.asset.href ||
+        !p.asset_upload_url || !p.asset_upload_authenticity_token) {
+      return { ok: false, error: "upload policy response missing expected fields" };
+    }
+
+    // Step 2: POST the bytes to storage (no github credentials — plain form POST).
+    const storeForm = new FormData();
+    for (const k in p.form) storeForm.append(k, p.form[k]);
+    storeForm.append("file", blob, filename);
+    const storeResp = await fetch(p.upload_url, { method: "POST", body: storeForm });
+    if (storeResp.status !== 201 && storeResp.status !== 204 && !storeResp.ok) {
+      return { ok: false, error: `storage upload failed: HTTP ${storeResp.status}` };
+    }
+
+    // Step 3: finalize the asset on github.com.
+    const finalizeUrl = p.asset_upload_url.startsWith("http")
+      ? p.asset_upload_url
+      : `https://github.com${p.asset_upload_url}`;
+    const finalizeForm = new FormData();
+    finalizeForm.append("authenticity_token", p.asset_upload_authenticity_token);
+    const finalizeResp = await fetch(finalizeUrl, {
+      method: "PUT",
+      credentials: "include",
+      headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
+      body: finalizeForm,
+    });
+    if (!finalizeResp.ok) {
+      return { ok: false, error: `asset finalize failed: HTTP ${finalizeResp.status}` };
+    }
+
+    return { ok: true, href: p.asset.href };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -184,8 +237,6 @@ async function uploadToGitHub(repo, blob, filename) {
 // from, and its result posted back to, the bridge it came from.
 // ---------------------------------------------------------------------------
 
-// Read the configured bridges as [{ url, token }]. Migrates the legacy single
-// { bridgeUrl, token } shape to a one-element list.
 async function getBridges() {
   const stored = await chrome.storage.local.get(["bridges", "bridgeUrl", "token"]);
   let list = Array.isArray(stored.bridges) ? stored.bridges : [];
@@ -208,8 +259,6 @@ async function getBridges() {
 const RUNNING = new Map();
 let GENERATION = 0;
 
-// Reconcile running loops with the configured bridges: start loops for new
-// bridges, let loops for removed bridges exit on their next iteration.
 async function supervise() {
   const bridges = await getBridges();
   const wanted = new Set(bridges.map((b) => b.url));
@@ -220,7 +269,10 @@ async function supervise() {
     if (!RUNNING.has(b.url)) {
       const gen = ++GENERATION;
       RUNNING.set(b.url, gen);
-      pollBridge(b.url, gen);
+      pollBridge(b.url, gen).catch((e) => {
+        console.debug("[ghshot] loop crashed:", b.url, String(e));
+        if (RUNNING.get(b.url) === gen) RUNNING.delete(b.url);
+      });
     }
   }
 }
@@ -229,7 +281,6 @@ async function pollBridge(url, gen) {
   console.debug("[ghshot] loop start:", url);
   try {
     while (RUNNING.get(url) === gen) {
-      // Re-read the token each iteration so edits apply without a restart.
       const b = (await getBridges()).find((x) => x.url === url);
       if (!b) return; // removed from config
       const token = b.token;
@@ -242,7 +293,7 @@ async function pollBridge(url, gen) {
         await sleep(NETWORK_RETRY_MS);
         continue;
       }
-      if (pollResp.status === 204) continue; // no job in the long-poll window
+      if (pollResp.status === 204) continue;
       if (!pollResp.ok) {
         console.debug("[ghshot] poll %s returned HTTP", url, pollResp.status);
         await sleep(NETWORK_RETRY_MS);
@@ -268,14 +319,17 @@ async function handleJob(bridgeUrl, token, job) {
   console.debug("[ghshot] job received:", job && job.id, job && job.repo, job && job.filename);
   let result;
   try {
-    const blobResp = await fetch(bridgeUrl + job.blob, {
-      headers: { [TOKEN_HEADER]: token },
-    });
+    if (!RE_REPO.test((job && job.repo) || "")) {
+      throw new Error(`invalid repo "${job && job.repo}" (expected owner/name)`);
+    }
+    const blobResp = await fetch(bridgeUrl + job.blob, { headers: { [TOKEN_HEADER]: token } });
     if (!blobResp.ok) {
       throw new Error(`failed to fetch image from bridge: HTTP ${blobResp.status}`);
     }
     const blob = await blobResp.blob();
-    const url = await uploadToGitHub(job.repo, blob, job.filename);
+    const base64 = await blobToBase64(blob);
+    const [owner, repoName] = job.repo.split("/");
+    const url = await uploadViaTab(owner, repoName, base64, job.filename, blob.type || "");
     console.debug("[ghshot] job %s succeeded: %s", job.id, url);
     result = { id: job.id, url };
   } catch (err) {
@@ -286,10 +340,7 @@ async function handleJob(bridgeUrl, token, job) {
   try {
     await fetch(bridgeUrl + RESULT_PATH, {
       method: "POST",
-      headers: {
-        [TOKEN_HEADER]: token,
-        "Content-Type": "application/json",
-      },
+      headers: { [TOKEN_HEADER]: token, "Content-Type": "application/json" },
       body: JSON.stringify(result),
     });
   } catch (err) {
@@ -302,7 +353,7 @@ function sleep(ms) {
 }
 
 // ---------------------------------------------------------------------------
-// Lifecycle hooks: keep the loop alive across service-worker restarts.
+// Lifecycle hooks: keep the loops alive across service-worker restarts.
 // ---------------------------------------------------------------------------
 
 chrome.alarms.create("ghshot-poll", { periodInMinutes: 1 });
@@ -318,15 +369,11 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "ghshot-poll") {
-    supervise();
-  }
+  if (alarm.name === "ghshot-poll") supervise();
 });
 
-// React to Options changes (bridges added/removed/edited) without a restart.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local") supervise();
 });
 
-// Kick the loops on initial worker evaluation too.
 supervise();
