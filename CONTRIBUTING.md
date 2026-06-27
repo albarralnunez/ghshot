@@ -11,7 +11,7 @@ dependencies, package managers, or build steps.
 
 | Component                 | Allowed dependencies                                              |
 | ------------------------- | ---------------------------------------------------------------- |
-| `skills/ghshot/ghshot.sh` | **bash 3.2** + coreutils + `gh` + `curl`. (`aws` only for the s3 backend.) |
+| `skills/ghshot/ghshot.sh` | **bash 3.2** + coreutils + `gh` + `curl`. Nothing else. |
 | `bridge/ghshot-bridge`    | **python3 standard library only** — no pip, no venv, no removed `cgi`. |
 | `extension/`              | **plain JS, MV3** — no npm, no bundler, no build step.            |
 | transport                 | `curl` and HTTP long-poll only — no native messaging, no websockets. |
@@ -36,7 +36,7 @@ Run the same checks CI runs before pushing:
 
 ```bash
 # shell
-shellcheck skills/ghshot/ghshot.sh tests/stubs/gh tests/stubs/aws
+shellcheck skills/ghshot/ghshot.sh tests/stubs/gh
 shfmt -d -i 2 -ci skills/ghshot/ghshot.sh        # -d = diff only; drop -d to format
 
 # python bridge
@@ -46,7 +46,7 @@ python3 -m py_compile bridge/ghshot-bridge
 bats tests/
 ```
 
-All tests must stay **hermetic** — no real network, no real `gh`/`aws`. Use the stubs in
+All tests must stay **hermetic** — no real network, no real `gh`. Use the stubs in
 `tests/stubs/`.
 
 ## Commit & PR guidelines

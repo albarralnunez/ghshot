@@ -15,20 +15,18 @@ pieces — a tiny local **bridge** and a **Chrome extension** — that together 
 
 ## Backends
 
-`ghshot` has three hosting backends. Same script, same markdown output — they differ only
+`ghshot` has two hosting backends. Same script, same markdown output — they differ only
 in where the bytes live and what guarantees you get.
 
 | Backend       | Private?                         | Inline render?                 | Extra deps                       | How it works |
 | ------------- | -------------------------------- | ------------------------------ | -------------------------------- | ------------ |
 | `attachments` | **Yes — true repo ACL**          | **Yes**                        | bridge (python3 stdlib) + Chrome extension | Uploads via your authenticated github.com session to the `user-attachments` endpoint. The asset is access-controlled to people who can see the repo. |
-| `s3`          | Obscure (unguessable URL)        | Yes                            | `aws` CLI + an S3/R2/MinIO bucket | Bytes go to your bucket under a random key; `gh` posts the comment. |
 | `release`     | **Yes** by default (then a link) | Only when `--public`           | none (just `gh`)                 | Bytes go to a release asset on a dedicated `<you>/ghshot-images` repo. Private assets render as a **link**; `--public` renders inline. |
 
 **Backend auto-selection** (when you don't pass `--backend` / set `GHSHOT_BACKEND`):
 
 1. If the **bridge is healthy** → `attachments` (the marquee path: true private + inline).
-2. Else if `GHSHOT_S3_BUCKET` is set → `s3`.
-3. Else → `release` (private link).
+2. Else → `release` (private link).
 
 `attachments` is the recommended backend: it is the only one that gives a **real
 access-controlled inline image** on a **private** repo, and it never stores a secret —
@@ -77,7 +75,7 @@ performs uploads from your session. **No cookies are exported and no password is
 ## Quickstart
 
 ```bash
-# auto-selects attachments if the bridge is up, else s3, else release
+# auto-selects attachments if the bridge is up, else release
 ghshot.sh shot.png                      # → markdown for the current repo
 
 ghshot.sh --pr 42 shot.png              # upload + comment on PR #42
@@ -115,15 +113,14 @@ The target repo for `attachments` is resolved from `GHSHOT_REPO`, else
 - **release**: assets are files on the `_ghshot` release of `<you>/ghshot-images`.
   Delete one with `gh release delete-asset _ghshot <name> --repo <you>/ghshot-images`,
   or delete the whole repo to wipe everything.
-- **s3**: delete the object from your bucket (`aws s3 rm s3://<bucket>/<key>`).
 
 ## Security model
 
 - **attachments** — *true access control*. The asset is visible only to accounts that can
   see the repo. Nothing is stored on disk except a local bridge token; your github.com
   session never leaves the browser.
-- **s3 / public release** — *security by obscurity*. The URL is unguessable but **not**
-  access-controlled; anyone with the link can view it.
+- **public release** (`--public`) — *security by obscurity*. The URL is unguessable but
+  **not** access-controlled; anyone with the link can view it.
 - **Never upload secrets.** The skill refuses sensitive-looking filenames and non-images
   by default; `--force` bypasses the guard only when you are sure.
 

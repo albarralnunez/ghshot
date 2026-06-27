@@ -2,22 +2,19 @@
 # ghshot — upload images to GitHub, get markdown-ready URLs for PRs/issues/comments.
 #
 # Core is dependency-free: needs only `gh` (authenticated) + coreutils. No node, no npm.
-# Three hosting backends:
+# Two hosting backends:
 #   attachments  THE marquee backend: TRUE private + inline. Uploads through your OWN
 #                logged-in github.com browser session via a local bridge + a Chrome
 #                extension (no cookie extraction, no stored secret). The resulting
 #                github.com/user-attachments URL renders INLINE and is access-controlled
 #                to people who can see the repo — works on PRIVATE repos. Auto-selected
 #                when the local bridge is running. Needs the bridge + extension; see
-#                SKILL.md. No `aws`, no extra hosting repo.
-#   s3           Upload bytes to an S3 (or S3-compatible: R2/MinIO) bucket under a random
-#                key, and still use `gh` to post the comment. Renders INLINE and stays
-#                private by obscurity. Requires the `aws` CLI and GHSHOT_S3_BUCKET.
+#                SKILL.md. No extra hosting repo.
 #   release      GitHub release asset on <you>/ghshot-images. PRIVATE by default.
 #                Private GitHub assets do NOT render inline (GitHub won't proxy them), so a
 #                private upload is emitted as a LINK. Use --public for an inline-rendering repo.
+#                A public release URL is unguessable but NOT access-controlled.
 #
-# "security by obscurity" (s3 / public release) = unguessable URL, NOT access-controlled.
 # attachments is the only backend with a TRUE access-control list (the repo's ACL).
 #
 # Usage:
@@ -26,9 +23,8 @@
 # Options:
 #   --pr N            upload all images, then post ONE comment on PR #N
 #   --issue N         same, but on issue #N
-#   --backend NAME    attachments | s3 | release
-#                     (auto: attachments if the bridge is up, else s3 if GHSHOT_S3_BUCKET
-#                      is set, else release)
+#   --backend NAME    attachments | release
+#                     (auto: attachments if the bridge is up, else release)
 #   --public          release backend only: host on a PUBLIC repo (needed for inline images)
 #   --private         force private (default); kept for explicitness
 #   --raw             print only the first raw URL (no markdown)
@@ -40,7 +36,7 @@
 #   --                end of options; treat the rest as file paths
 #
 # Environment:
-#   GHSHOT_BACKEND=attachments|s3|release   default backend
+#   GHSHOT_BACKEND=attachments|release   default backend
 #   GHSHOT_PUBLIC=1             default to a public release repo
 #   GHSHOT_FORCE=1             skip content guards
 #   GHSHOT_ASSUME_YES=1        skip the create-repo confirmation
@@ -50,18 +46,10 @@
 #     GHSHOT_BRIDGE_URL=url         bridge base URL (default http://127.0.0.1:PORT)
 #     GHSHOT_BRIDGE_PORT=41330      bridge port when GHSHOT_BRIDGE_URL is unset
 #     GHSHOT_BRIDGE_TOKEN=hex       auth token (default: ~/.config/ghshot/bridge-token)
-#   S3 backend:
-#     GHSHOT_S3_BUCKET=name        (required) bucket name
-#     GHSHOT_S3_PREFIX=ghshot      key prefix (default "ghshot")
-#     GHSHOT_S3_REGION=us-east-1   region for the public URL (default AWS_REGION or us-east-1)
-#     GHSHOT_S3_ENDPOINT=url       custom endpoint (Cloudflare R2 / MinIO)
-#     GHSHOT_S3_PUBLIC_BASE=url    base URL for object access (CDN / custom domain)
-#     GHSHOT_S3_PRESIGN=1          emit a presigned URL instead of a path URL
-#     GHSHOT_S3_EXPIRY=604800      presign lifetime in seconds (default 7 days)
 #
-# SECURITY: "security by obscurity" means the URL is unguessable, NOT access-controlled.
-#           Anyone with the link can view it. Do not upload secrets. Use --force to bypass
-#           the guards only when you are sure.
+# SECURITY: a public release URL is unguessable but NOT access-controlled — anyone with
+#           the link can view it. Do not upload secrets. Use --force to bypass the guards
+#           only when you are sure.
 set -euo pipefail
 
 VERSION="0.1.0"
@@ -75,7 +63,7 @@ die() {
 }
 
 usage() {
-  sed -n '2,64p' "$0" | sed 's/^# \{0,1\}//; s/^#//'
+  sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//; s/^#//'
 }
 
 # ---- defaults (env, then overridable by flags) ----
@@ -126,17 +114,15 @@ bridge_healthy() {
 }
 
 # auto-precedence: explicit --backend / GHSHOT_BACKEND wins; else attachments if the
-# bridge is running; else s3 if a bucket is configured; else release.
+# bridge is running; else release.
 if [ -z "$backend" ]; then
   if bridge_healthy; then
     backend="attachments"
-  elif [ -n "${GHSHOT_S3_BUCKET:-}" ]; then
-    backend="s3"
   else
     backend="release"
   fi
 fi
-case "$backend" in attachments | release | s3) ;; *) die "unknown backend: $backend (use attachments|s3|release)" ;; esac
+case "$backend" in attachments | release) ;; *) die "unknown backend: $backend (use attachments|release)" ;; esac
 
 if [ -n "$target_kind" ]; then
   case "$target_num" in
@@ -194,7 +180,7 @@ vet_file() {
   fi
 }
 
-# safe, GitHub-/S3-stable asset name: <stem>-<token>.<ext>, restricted charset
+# safe, GitHub-stable asset name: <stem>-<token>.<ext>, restricted charset
 asset_name() {
   local base="$1" ext stem raw
   case "$base" in *.*) ext=".${base##*.}" ;; *) ext="" ;; esac
@@ -291,35 +277,6 @@ attachments_upload() {
   printf '%s' "$url"
 }
 
-# ---- s3 backend (S3 / R2 / MinIO) ----
-s3_upload() {
-  local path="$1" name key bucket prefix region url
-  command -v aws >/dev/null 2>&1 || die "aws CLI not found — required for --backend s3 (https://aws.amazon.com/cli/)"
-  bucket="${GHSHOT_S3_BUCKET:-}"
-  [ -n "$bucket" ] || die "set GHSHOT_S3_BUCKET to use the s3 backend"
-  prefix="${GHSHOT_S3_PREFIX:-ghshot}"
-  name="$(asset_name "$(basename -- "$path")")"
-  key="${prefix%/}/$(rand_token)/$name"
-
-  local up=(s3 cp "$path" "s3://$bucket/$key")
-  [ -n "${GHSHOT_S3_ENDPOINT:-}" ] && up+=(--endpoint-url "$GHSHOT_S3_ENDPOINT")
-  aws "${up[@]}" >/dev/null 2>&1 || die "aws s3 upload failed (s3://$bucket/$key)"
-
-  if [ "${GHSHOT_S3_PRESIGN:-}" = 1 ]; then
-    local ps=(s3 presign "s3://$bucket/$key" --expires-in "${GHSHOT_S3_EXPIRY:-604800}")
-    [ -n "${GHSHOT_S3_ENDPOINT:-}" ] && ps+=(--endpoint-url "$GHSHOT_S3_ENDPOINT")
-    url="$(aws "${ps[@]}")" || die "aws s3 presign failed"
-  elif [ -n "${GHSHOT_S3_PUBLIC_BASE:-}" ]; then
-    url="${GHSHOT_S3_PUBLIC_BASE%/}/$key"
-  elif [ -n "${GHSHOT_S3_ENDPOINT:-}" ]; then
-    url="${GHSHOT_S3_ENDPOINT%/}/$bucket/$key"
-  else
-    region="${GHSHOT_S3_REGION:-${AWS_REGION:-us-east-1}}"
-    url="https://$bucket.s3.$region.amazonaws.com/$key"
-  fi
-  printf '%s' "$url"
-}
-
 upload_one() {
   local path="$1"
   [ -f "$path" ] || die "file not found: $path"
@@ -327,12 +284,11 @@ upload_one() {
   case "$backend" in
     attachments) attachments_upload "$path" ;;
     release) release_upload "$path" ;;
-    s3) s3_upload "$path" ;;
   esac
 }
 
 # inline rendering: everything renders inline EXCEPT a private GitHub release asset
-# (attachments and s3 both render inline; attachments is access-controlled, s3 is obscure)
+# (attachments renders inline and is access-controlled; private release is a link)
 inline=1
 [ "$backend" = release ] && [ "$visibility" = private ] && inline=0
 
@@ -346,7 +302,7 @@ for f in "${files[@]}"; do
 done
 md="${md%$'\n'}"
 
-[ "$inline" = 1 ] || printf 'ghshot: note: private GitHub uploads render as a LINK, not an inline image (use --public or the s3 backend for inline).\n' >&2
+[ "$inline" = 1 ] || printf 'ghshot: note: private GitHub uploads render as a LINK, not an inline image (use --public, or the attachments backend for inline).\n' >&2
 
 # JSON-escape a string (preserves newlines as \n)
 json_escape() {
@@ -355,7 +311,6 @@ json_escape() {
 
 vis_label() {
   case "$backend" in
-    s3) printf 'obscure' ;;          # unguessable URL, not access-controlled
     attachments) printf 'private' ;; # TRUE ACL: only people who can see the repo
     *) printf '%s' "$visibility" ;;
   esac

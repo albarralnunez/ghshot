@@ -30,8 +30,8 @@ When reporting, include:
   extracted and no GitHub credential is stored on disk.** The only local secret is the
   bridge token (`~/.config/ghshot/bridge-token`, chmod 0600), which only authorizes the
   loopback bridge.
-- **s3 / public release backends** — *security by obscurity*. URLs are unguessable but
-  **not** access-controlled; anyone with the link can view the image.
+- **public release backend** (`--public`) — *security by obscurity*. URLs are unguessable
+  but **not** access-controlled; anyone with the link can view the image.
 - **Never upload secrets.** The CLI refuses sensitive-looking filenames and non-image
   files by default; `--force` bypasses that guard.
 

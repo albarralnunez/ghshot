@@ -28,7 +28,6 @@ body:
       options:
         - "not applicable"
         - attachments
-        - s3
         - release
     validations:
       required: false

@@ -1,7 +1,8 @@
 #!/usr/bin/env bats
 #
 # Hermetic tests for skills/ghshot/ghshot.sh.
-# No network: `gh` and `aws` are replaced by stubs in tests/stubs.
+# No network: `gh` is replaced by a stub in tests/stubs; the bridge is forced
+# unhealthy so the attachments backend never auto-selects.
 
 setup() {
   SCRIPT="${BATS_TEST_DIRNAME}/../skills/ghshot/ghshot.sh"
@@ -10,9 +11,10 @@ setup() {
   export PATH
 
   # Clean any ambient ghshot config so tests are deterministic.
-  unset GHSHOT_BACKEND GHSHOT_S3_BUCKET GHSHOT_PUBLIC GHSHOT_FORCE \
-    GHSHOT_S3_PUBLIC_BASE GHSHOT_S3_PRESIGN GHSHOT_MAX_BYTES GHSHOT_REPO
+  unset GHSHOT_BACKEND GHSHOT_PUBLIC GHSHOT_FORCE GHSHOT_MAX_BYTES GHSHOT_REPO
   export GHSHOT_ASSUME_YES=1
+  # Force the bridge unhealthy so auto-detection lands on release.
+  export GHSHOT_BRIDGE_URL=http://127.0.0.1:1
 
   TMP="$(mktemp -d)"
   IMG="${TMP}/shot.png"
@@ -162,25 +164,23 @@ teardown() {
 
 # ---- backend selection / precedence ----------------------------------------
 
-@test "explicit --backend release wins over GHSHOT_S3_BUCKET" {
-  run env GHSHOT_S3_BUCKET=mybucket bash "$SCRIPT" --backend release --json "$IMG"
+@test "explicit --backend release is honored" {
+  run bash "$SCRIPT" --backend release --json "$IMG"
   [ "$status" -eq 0 ]
   [[ "$output" == *'"backend":"release"'* ]]
 }
 
 @test "GHSHOT_BACKEND env selects the backend" {
-  run env GHSHOT_BACKEND=release GHSHOT_S3_BUCKET=mybucket bash "$SCRIPT" --json "$IMG"
+  run env GHSHOT_BACKEND=release bash "$SCRIPT" --json "$IMG"
   [ "$status" -eq 0 ]
   [[ "$output" == *'"backend":"release"'* ]]
 }
 
-@test "GHSHOT_S3_BUCKET auto-selects the s3 backend" {
-  run env GHSHOT_S3_BUCKET=mybucket GHSHOT_S3_PUBLIC_BASE=https://cdn.example.com \
-    bash "$SCRIPT" --json "$IMG"
+@test "auto-selects release when no bridge is running" {
+  # GHSHOT_BRIDGE_URL points at an unused port so bridge_healthy fails fast
+  run env GHSHOT_BRIDGE_URL=http://127.0.0.1:1 bash "$SCRIPT" --json "$IMG"
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"backend":"s3"'* ]]
-  [[ "$output" == *'"visibility":"obscure"'* ]]
-  [[ "$output" == *'cdn.example.com'* ]]
+  [[ "$output" == *'"backend":"release"'* ]]
 }
 
 @test "unknown backend is rejected" {

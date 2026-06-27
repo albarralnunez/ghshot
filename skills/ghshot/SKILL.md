@@ -1,8 +1,8 @@
 ---
 name: ghshot
-description: Upload an image (screenshot, diagram) to a GitHub PR, issue, or comment and get a markdown-ready URL. GitHub has no API for image upload and `gh` can't do it. Three backends: attachments (TRUE private + inline via your own logged-in github.com browser session through a tiny local bridge + Chrome extension — no cookie extraction, no stored secret; works on PRIVATE repos), s3 (inline, private-by-obscurity, needs `aws` + a bucket), and release (dependency-free, needs only an authenticated `gh`). Use when asked to attach/embed a screenshot, post a before/after image, or add a picture to a PR/issue/comment.
+description: Upload an image (screenshot, diagram) to a GitHub PR, issue, or comment and get a markdown-ready URL. GitHub has no API for image upload and `gh` can't do it. Two backends: attachments (TRUE private + inline via your own logged-in github.com browser session through a tiny local bridge + Chrome extension — no cookie extraction, no stored secret; works on PRIVATE repos) and release (dependency-free, needs only an authenticated `gh`). Use when asked to attach/embed a screenshot, post a before/after image, or add a picture to a PR/issue/comment.
 license: MIT
-argument-hint: "<image-path> [--pr N | --issue N] [--backend attachments|s3|release]"
+argument-hint: "<image-path> [--pr N | --issue N] [--backend attachments|release]"
 allowed-tools:
   - Bash(gh:*)
   - Bash(bash:*)
@@ -13,7 +13,7 @@ metadata:
 
 # ghshot — upload images to GitHub
 
-GitHub has no API to attach images to PRs/issues/comments ([cli#4745](https://github.com/cli/cli/discussions/4745)). `ghshot.sh` (shipped next to this file) solves it with three backends, then prints markdown-ready URLs.
+GitHub has no API to attach images to PRs/issues/comments ([cli#4745](https://github.com/cli/cli/discussions/4745)). `ghshot.sh` (shipped next to this file) solves it with two backends, then prints markdown-ready URLs.
 
 ## Invoking the script
 
@@ -46,16 +46,14 @@ stdout is pipe-safe (only the URL/markdown); progress goes to stderr. You can pi
 | backend       | private repos | renders inline | extra deps                      | URL access model                          |
 |---------------|:-------------:|:--------------:|---------------------------------|-------------------------------------------|
 | `attachments` | ✅ yes        | ✅ yes         | bridge + Chrome extension       | **TRUE ACL** — only people who can see the repo |
-| `s3`          | ✅ yes        | ✅ yes         | `aws` CLI + `GHSHOT_S3_BUCKET`  | security-by-obscurity (unguessable URL)   |
 | `release`     | ✅ yes        | ❌ no (private)¹| only an authenticated `gh`      | security-by-obscurity (unguessable URL)   |
 
-¹ A **private** GitHub release asset cannot render inline (GitHub won't proxy it), so it is emitted as a `[link]`. Use `--public` for an inline-rendering release repo, or prefer `attachments`/`s3`.
+¹ A **private** GitHub release asset cannot render inline (GitHub won't proxy it), so it is emitted as a `[link]`. Use `--public` for an inline-rendering release repo, or prefer `attachments`.
 
 **Auto-selection** (when neither `--backend` nor `GHSHOT_BACKEND` is set):
 
 1. `attachments` if the local bridge is running (`GET /healthz` on the bridge succeeds), else
-2. `s3` if `GHSHOT_S3_BUCKET` is set, else
-3. `release`.
+2. `release`.
 
 `attachments` is the marquee backend: **true private + inline**, using the user's own
 github.com session. No session cookie is extracted and no secret is stored on disk.
@@ -103,7 +101,6 @@ URL that renders inline and is access-controlled to anyone who can see the repo.
 
 - **attachments**: the bridge running + the extension installed and signed in to github.com.
   (`gh` is only used to resolve the repo when `GHSHOT_REPO` is unset.)
-- **s3**: the `aws` CLI and `GHSHOT_S3_BUCKET` (see `--help` for R2/MinIO/presign env vars).
 - **release**: `gh` authenticated (`gh auth login`). First run auto-creates `<you>/ghshot-images`
   (private by default) with a holding release `_ghshot`.
 
@@ -119,7 +116,7 @@ URL that renders inline and is access-controlled to anyone who can see the repo.
 
 - **Never upload secrets.** The content guards refuse obviously sensitive filenames and non-images;
   `--force` / `GHSHOT_FORCE=1` bypasses them — only when you are sure.
-- `s3` and public `release` URLs are **security-by-obscurity**: unguessable, but anyone with the
-  link can view them.
+- A **public** `release` URL is **security-by-obscurity**: unguessable, but anyone with the
+  link can view it.
 - `attachments` is the only backend with a **true ACL**: the asset is access-controlled to people
   who can see the repo.
