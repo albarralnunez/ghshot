@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-27
+
+### Fixed
+
+- **Extension: robust github.com tab selection.** The upload (which runs inside a
+  github.com tab) failed with `Frame with ID 0 is showing error page` when the chosen tab
+  was discarded/suspended or an error page. It now skips discarded/unloaded tabs, tries
+  every open github.com tab, and falls back to opening a fresh background tab (navigating
+  and verifying it loaded) before injecting — with clearer errors.
+- **Bridge: silence benign connection resets.** A client dropping a keep-alive socket
+  (`ConnectionResetError` / `BrokenPipeError`) no longer logs a traceback.
+
 ## [0.3.0] - 2026-06-27
 
 ### Fixed
@@ -85,7 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CI (shellcheck, shfmt, py_compile, bats on Ubuntu + macOS), issue/PR templates,
   dependabot, and hermetic bats tests with a `gh` stub.
 
-[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/albarralnunez/ghshot/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/albarralnunez/ghshot/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/albarralnunez/ghshot/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/albarralnunez/ghshot/compare/v0.1.1...v0.2.0

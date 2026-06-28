@@ -66,43 +66,80 @@ function waitTabComplete(tabId) {
   });
 }
 
-// Find a github.com tab (or open a background one), inject pageUpload, return
-// the asset href. Closes any tab it opened.
+async function injectUpload(tabId, owner, repo, base64, filename, mime) {
+  const injection = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: pageUpload,
+    args: [owner, repo, base64, filename, mime || ""],
+  });
+  return injection && injection[0] ? injection[0].result : null;
+}
+
+// A thrown executeScript error that means "this tab can't be scripted right now"
+// (discarded, showing an error page, chrome:// page, closed) — as opposed to a
+// genuine upload failure returned by pageUpload.
+function isTabStateError(msg) {
+  return /error page|no tab with id|cannot be scripted|cannot access|no frame|frame with id|chrome:\/\/|the tab was closed|extension manifest must request permission/i.test(
+    msg
+  );
+}
+
+// Run the upload from a github.com tab so the requests are first-party (carry
+// the session). Prefer an already-open, loaded github.com tab; otherwise open a
+// background tab on the repo, use it, and close it.
 async function uploadViaTab(owner, repo, base64, filename, mime) {
+  const repoUrl = `https://github.com/${owner}/${repo}`;
+
   let tabs = [];
   try {
     tabs = await chrome.tabs.query({ url: "https://github.com/*" });
   } catch (e) {
     tabs = [];
   }
-  let tab = tabs && tabs[0];
-  let openedId = null;
-  if (!tab) {
-    tab = await chrome.tabs.create({
-      url: `https://github.com/${owner}/${repo}`,
-      active: false,
-    });
-    openedId = tab.id;
-    await waitTabComplete(tab.id);
-  }
-  try {
-    const injection = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: pageUpload,
-      args: [owner, repo, base64, filename, mime || ""],
-    });
-    const result = injection && injection[0] && injection[0].result;
-    if (!result || !result.ok) {
-      throw new Error((result && result.error) || "upload failed in page context");
+  const candidates = tabs.filter((t) => t && t.id != null && !t.discarded && t.status !== "unloaded");
+
+  for (const t of candidates) {
+    try {
+      const r = await injectUpload(t.id, owner, repo, base64, filename, mime);
+      if (r && r.ok) return r.href;
+      // pageUpload ran but reported a real failure (e.g. signed out) — surface it,
+      // don't keep retrying other tabs (they'd give the same answer).
+      if (r && r.error) throw new Error(r.error);
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      if (!isTabStateError(msg)) throw e; // genuine upload error
+      // else: bad tab state — try the next candidate / a fresh tab
     }
-    return result.href;
-  } finally {
-    if (openedId !== null) {
-      try {
-        await chrome.tabs.remove(openedId);
-      } catch (e) {
-        /* ignore */
+  }
+
+  // No usable existing tab: open a dedicated background tab on the repo.
+  const tab = await chrome.tabs.create({ url: repoUrl, active: false });
+  try {
+    await waitTabComplete(tab.id);
+    const info = await chrome.tabs.get(tab.id).catch(() => null);
+    if (!info || !/^https:\/\/github\.com\//.test(info.url || "")) {
+      await chrome.tabs.update(tab.id, { url: repoUrl });
+      await waitTabComplete(tab.id);
+    }
+    let r;
+    try {
+      r = await injectUpload(tab.id, owner, repo, base64, filename, mime);
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      if (isTabStateError(msg)) {
+        throw new Error("could not run the upload in a github.com tab — open a github.com tab (signed in) and retry");
       }
+      throw e;
+    }
+    if (!r || !r.ok) {
+      throw new Error((r && r.error) || "upload failed in page context");
+    }
+    return r.href;
+  } finally {
+    try {
+      await chrome.tabs.remove(tab.id);
+    } catch (e) {
+      /* ignore */
     }
   }
 }

@@ -37,7 +37,7 @@
 # --force bypasses them only when you are sure.
 set -euo pipefail
 
-VERSION="0.2.1"
+VERSION="0.3.1"
 MAX_BYTES_DEFAULT=26214400 # 25 MiB
 
 die() {

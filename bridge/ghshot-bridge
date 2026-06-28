@@ -34,7 +34,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "0.2.1"
+VERSION = "0.3.1"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 41330
 DEFAULT_TOKEN_FILE = os.path.expanduser("~/.config/ghshot/bridge-token")
@@ -228,6 +228,14 @@ class GhshotHandler(BaseHTTPRequestHandler):
             self.send_header("Vary", "Origin")
             self.send_header("Access-Control-Allow-Headers", "X-Ghshot-Token, Content-Type")
         BaseHTTPRequestHandler.end_headers(self)
+
+    def handle_one_request(self):
+        # A client closing a keep-alive connection raises ConnectionResetError/
+        # BrokenPipeError from the socket read; that is normal, not an error.
+        try:
+            BaseHTTPRequestHandler.handle_one_request(self)
+        except (ConnectionResetError, BrokenPipeError):
+            self.close_connection = True
 
     # -- helpers ------------------------------------------------------------
 
