@@ -171,3 +171,24 @@ teardown() { rm -rf "$TMP"; }
   [ "$status" -ne 0 ]
   [[ "$output" == *"not authenticated"* ]]
 }
+
+@test "--repo sets the target repo and needs no gh (no --pr)" {
+  GH_LOG="$TMP/gh.log"
+  run env GH_STUB_LOG="$GH_LOG" bash "$SCRIPT" --json --repo acme/widgets "$IMG"
+  [ "$status" -eq 0 ]
+  [ ! -f "$GH_LOG" ] # gh never invoked when --repo is given and not commenting
+  [[ "$output" == *'"url":"https://github.com/user-attachments/assets/'* ]]
+}
+
+@test "--repo rejects a non owner/name value" {
+  run bash "$SCRIPT" --repo "owner/name/extra" "$IMG"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"owner/name form"* ]]
+}
+
+@test "--pr with --repo targets that repo in the gh comment" {
+  GH_LOG="$TMP/gh.log"
+  run env GH_STUB_LOG="$GH_LOG" bash "$SCRIPT" --repo acme/widgets --pr 7 "$IMG"
+  [ "$status" -eq 0 ]
+  grep -q 'pr comment 7 --repo acme/widgets' "$GH_LOG"
+}

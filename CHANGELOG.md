@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-27
+
+### Added
+
+- **`--repo owner/name`** — explicitly target a repository for both the attachment and the
+  `--pr`/`--issue` comment, so ghshot works from any directory (not just inside the repo).
+  Precedence: `--repo` > `GHSHOT_REPO` > `gh repo view` in the cwd. The resolved repo is
+  now also passed to `gh … comment --repo`, fixing `--pr`/`--issue` when run outside the
+  target checkout.
+
 ## [0.3.1] - 2026-06-27
 
 ### Fixed
@@ -97,7 +107,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CI (shellcheck, shfmt, py_compile, bats on Ubuntu + macOS), issue/PR templates,
   dependabot, and hermetic bats tests with a `gh` stub.
 
-[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/albarralnunez/ghshot/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/albarralnunez/ghshot/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/albarralnunez/ghshot/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/albarralnunez/ghshot/compare/v0.2.0...v0.2.1

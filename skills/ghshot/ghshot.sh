@@ -17,6 +17,8 @@
 # Options:
 #   --pr N            upload all images, then post ONE comment on PR #N
 #   --issue N         same, but on issue #N
+#   --repo OWNER/NAME target repo for the attachment AND the --pr/--issue comment
+#                     (default: GHSHOT_REPO, else `gh repo view` in the cwd)
 #   --raw             print only the first raw URL (no markdown)
 #   --json            print {"url","markdown","visibility"} (machine-readable)
 #   --force, -f       skip the sensitive-filename / image-only / size guards
@@ -27,7 +29,7 @@
 # Environment:
 #   GHSHOT_FORCE=1                skip content guards
 #   GHSHOT_MAX_BYTES=N            max upload size in bytes (default 26214400 = 25 MiB)
-#   GHSHOT_REPO=owner/name        repo to attach to (default: gh repo view in cwd)
+#   GHSHOT_REPO=owner/name        default repo (overridden by --repo; else gh repo view in cwd)
 #   GHSHOT_BRIDGE_URL=url          bridge base URL (default http://127.0.0.1:PORT)
 #   GHSHOT_BRIDGE_PORT=41330       bridge port when GHSHOT_BRIDGE_URL is unset
 #   GHSHOT_BRIDGE_TOKEN=hex        auth token (default: ~/.config/ghshot/bridge-token)
@@ -37,7 +39,7 @@
 # --force bypasses them only when you are sure.
 set -euo pipefail
 
-VERSION="0.3.1"
+VERSION="0.4.0"
 MAX_BYTES_DEFAULT=26214400 # 25 MiB
 
 die() {
@@ -46,13 +48,14 @@ die() {
 }
 
 usage() {
-  sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//; s/^#//'
+  sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//; s/^#//'
 }
 
 # ---- defaults (env, then overridable by flags) ----
 mode="markdown" # markdown | raw | json
 target_kind=""  # pr | issue
 target_num=""
+repo_opt=""
 force=0
 files=()
 [ "${GHSHOT_FORCE:-}" = 1 ] && force=1
@@ -77,6 +80,10 @@ while [ $# -gt 0 ]; do
     --issue)
       target_kind="issue"
       target_num="${2:-}"
+      shift 2 || shift
+      ;;
+    --repo)
+      repo_opt="${2:-}"
       shift 2 || shift
       ;;
     --force | -f)
@@ -114,6 +121,14 @@ if [ -n "$target_kind" ]; then
 fi
 [ "${#files[@]}" -gt 0 ] || die "no image given. usage: ghshot [options] <image>...  (see --help)"
 case "$max_bytes" in '' | *[!0-9]*) die "GHSHOT_MAX_BYTES must be an integer, got: $max_bytes" ;; esac
+if [ -n "$repo_opt" ]; then
+  case "$repo_opt" in
+    */*/* | /* | */) die "--repo must be in owner/name form" ;;
+    */*) ;;
+    *) die "--repo must be in owner/name form" ;;
+  esac
+  case "$repo_opt" in *[!A-Za-z0-9._/-]*) die "--repo has invalid characters (expected owner/name)" ;; esac
+fi
 
 # ---- bridge config (local bridge + browser extension) ----
 bridge_port="${GHSHOT_BRIDGE_PORT:-41330}"
@@ -134,7 +149,7 @@ command -v curl >/dev/null 2>&1 || die "curl not found — required by ghshot"
 # gh is used to resolve the current repo (when GHSHOT_REPO is unset) and to post
 # --pr/--issue comments.
 need_gh=0
-[ -z "${GHSHOT_REPO:-}" ] && need_gh=1
+[ -z "$repo_opt" ] && [ -z "${GHSHOT_REPO:-}" ] && need_gh=1
 [ -n "$target_kind" ] && need_gh=1
 if [ "$need_gh" = 1 ]; then
   command -v gh >/dev/null 2>&1 || die "gh CLI not found — install from https://cli.github.com"
@@ -165,11 +180,11 @@ vet_file() {
 # Resolve the repo to attach to: GHSHOT_REPO, else `gh repo view` in the current dir.
 resolve_repo() {
   local r
-  r="${GHSHOT_REPO:-}"
+  r="${repo_opt:-${GHSHOT_REPO:-}}"
   if [ -z "$r" ]; then
     r="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
   fi
-  [ -n "$r" ] || die "could not resolve repo — set GHSHOT_REPO=owner/name or run inside a git repo with a GitHub remote"
+  [ -n "$r" ] || die "could not resolve repo — pass --repo owner/name, set GHSHOT_REPO, or run inside a git repo with a GitHub remote"
   printf '%s' "$r"
 }
 
@@ -181,7 +196,6 @@ upload_one() {
   vet_file "$path"
   [ -n "$bridge_token" ] || die "no bridge token found — set GHSHOT_BRIDGE_TOKEN or start the bridge to create ~/.config/ghshot/bridge-token (run: bridge/ghshot-bridge --print-token)"
   bridge_healthy || die "ghshot bridge not reachable at $bridge_url — start it (run: bridge/ghshot-bridge) and keep Chrome open with the ghshot extension installed and signed in to github.com"
-  [ -n "$attach_repo" ] || attach_repo="$(resolve_repo)"
   url="$(curl -fsS -H "X-Ghshot-Token: $bridge_token" \
     -F repo="$attach_repo" -F file=@"$path" \
     "$bridge_url/v1/upload?format=text")" ||
@@ -193,6 +207,11 @@ upload_one() {
   esac
   printf '%s' "$url"
 }
+
+# Resolve the target repo once in the parent shell — upload_one runs inside a
+# $() subshell, so resolving there would not persist, and the --pr/--issue
+# comment below needs it too.
+attach_repo="$(resolve_repo)"
 
 # ---- upload everything, build markdown (always inline) ----
 md=""
@@ -219,9 +238,11 @@ json_escape() {
 
 # ---- post a comment, or print ----
 if [ -n "$target_kind" ]; then
-  printf '%s\n' "$md" | gh "$target_kind" comment "$target_num" --body-file - >&2 ||
-    die "failed to comment on $target_kind #$target_num"
-  printf 'ghshot: commented on %s #%s\n' "$target_kind" "$target_num" >&2
+  # attach_repo was resolved during the upload(s); target the same repo for the
+  # comment so --pr/--issue work from any directory.
+  printf '%s\n' "$md" | gh "$target_kind" comment "$target_num" --repo "$attach_repo" --body-file - >&2 ||
+    die "failed to comment on $target_kind #$target_num (repo $attach_repo)"
+  printf 'ghshot: commented on %s #%s (%s)\n' "$target_kind" "$target_num" "$attach_repo" >&2
   exit 0
 fi
 

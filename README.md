@@ -111,6 +111,7 @@ URL and its token.)
 ```bash
 ghshot.sh shot.png                      # → inline markdown for the current repo
 ghshot.sh --pr 42 shot.png              # upload + comment on PR #42
+ghshot.sh --repo owner/name --pr 42 shot.png   # target a repo from any directory
 ghshot.sh --issue 10 bug.png            # upload + comment on issue #10
 ghshot.sh --raw shot.png                # raw URL only
 ghshot.sh --json shot.png               # {"url","markdown","visibility"}

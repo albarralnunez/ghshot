@@ -8,7 +8,7 @@ allowed-tools:
   - Bash(bash:*)
 metadata:
   author: albarralnunez
-  version: 0.3.1
+  version: 0.4.0
 ---
 
 # ghshot — upload images to GitHub
@@ -27,6 +27,7 @@ Run the script **by its full path in this skill's directory** — never a bare `
 # SKILL_DIR = the directory that contains this SKILL.md
 "$SKILL_DIR/ghshot.sh" shot.png                 # → ![shot](https://github.com/user-attachments/assets/<uuid>)
 "$SKILL_DIR/ghshot.sh" --pr 42 shot.png         # upload + comment on PR #42 (--issue N for issues)
+"$SKILL_DIR/ghshot.sh" --repo owner/name --pr 42 shot.png   # target a repo from ANY directory
 "$SKILL_DIR/ghshot.sh" --pr 42 before.png after.png   # multiple images, one comment
 "$SKILL_DIR/ghshot.sh" --raw shot.png           # raw URL only (for embedding in your own text)
 "$SKILL_DIR/ghshot.sh" --json shot.png          # {"url","markdown","visibility"} — for agents
