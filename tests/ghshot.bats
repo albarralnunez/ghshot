@@ -41,7 +41,8 @@ teardown() { rm -rf "$TMP"; }
   run bash "$SCRIPT" --help
   [ "$status" -eq 0 ]
   [[ "$output" == *"browser session"* ]]
-  [[ "$output" == *"--pr N"* ]]
+  [[ "$output" == *"--pr"* ]]
+  [[ "$output" == *"--pick"* ]]
 }
 
 @test "no image given is an error" {
@@ -56,10 +57,10 @@ teardown() { rm -rf "$TMP"; }
   [[ "$output" == *"unknown flag"* ]]
 }
 
-@test "--pr requires a number" {
-  run bash "$SCRIPT" --pr abc "$IMG"
+@test "a non-numeric token after --pr is treated as a file, not a PR number" {
+  run env GH_STUB_PR=99 bash "$SCRIPT" --pr nope-not-a-number.png
   [ "$status" -ne 0 ]
-  [[ "$output" == *"needs a number"* ]]
+  [[ "$output" == *"file not found"* ]]
 }
 
 @test "--issue requires a number" {
@@ -170,4 +171,38 @@ teardown() { rm -rf "$TMP"; }
   run env GH_STUB_AUTH_FAIL=1 bash "$SCRIPT" "$IMG"
   [ "$status" -ne 0 ]
   [[ "$output" == *"not authenticated"* ]]
+}
+
+@test "--repo sets the target repo and needs no gh (no --pr)" {
+  GH_LOG="$TMP/gh.log"
+  run env GH_STUB_LOG="$GH_LOG" bash "$SCRIPT" --json --repo acme/widgets "$IMG"
+  [ "$status" -eq 0 ]
+  [ ! -f "$GH_LOG" ] # gh never invoked when --repo is given and not commenting
+  [[ "$output" == *'"url":"https://github.com/user-attachments/assets/'* ]]
+}
+
+@test "--repo rejects a non owner/name value" {
+  run bash "$SCRIPT" --repo "owner/name/extra" "$IMG"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"owner/name form"* ]]
+}
+
+@test "--pr with --repo targets that repo in the gh comment" {
+  GH_LOG="$TMP/gh.log"
+  run env GH_STUB_LOG="$GH_LOG" bash "$SCRIPT" --repo acme/widgets --pr 7 "$IMG"
+  [ "$status" -eq 0 ]
+  grep -q 'pr comment 7 --repo acme/widgets' "$GH_LOG"
+}
+
+@test "--pr with no number targets the current branch's PR" {
+  GH_LOG="$TMP/gh.log"
+  run env GH_STUB_LOG="$GH_LOG" GH_STUB_PR=314 bash "$SCRIPT" --pr "$IMG"
+  [ "$status" -eq 0 ]
+  grep -q 'pr comment 314' "$GH_LOG"
+}
+
+@test "--pr without a number AND --repo (other repo) requires a number" {
+  run bash "$SCRIPT" --repo acme/widgets --pr "$IMG"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"PR number is required"* ]]
 }

@@ -34,7 +34,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "0.1.0"
+VERSION = "0.5.0"
+DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 41330
 DEFAULT_TOKEN_FILE = os.path.expanduser("~/.config/ghshot/bridge-token")
 TOKEN_HEADER = "X-Ghshot-Token"
@@ -215,6 +216,27 @@ class GhshotHandler(BaseHTTPRequestHandler):
     token = None
     store = None
 
+    def end_headers(self):
+        # CORS: extension *pages* (options/popup) do NOT get the host-permission
+        # CORS exemption that the service worker enjoys, so their fetch() to the
+        # bridge needs Access-Control-Allow-Origin to be readable. Echo the
+        # extension's own origin (already gated to chrome-extension:// by
+        # _origin_ok / do_OPTIONS). Other callers (CLI/curl, no Origin) get none.
+        origin = self.headers.get("Origin")
+        if origin and origin.startswith("chrome-extension://"):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Headers", "X-Ghshot-Token, Content-Type")
+        BaseHTTPRequestHandler.end_headers(self)
+
+    def handle_one_request(self):
+        # A client closing a keep-alive connection raises ConnectionResetError/
+        # BrokenPipeError from the socket read; that is normal, not an error.
+        try:
+            BaseHTTPRequestHandler.handle_one_request(self)
+        except (ConnectionResetError, BrokenPipeError):
+            self.close_connection = True
+
     # -- helpers ------------------------------------------------------------
 
     def _send_json(self, status, obj):
@@ -283,6 +305,17 @@ class GhshotHandler(BaseHTTPRequestHandler):
             self.rfile.read(min(length, MAX_BODY_BYTES))
 
     # -- routing ------------------------------------------------------------
+
+    def do_OPTIONS(self):
+        # CORS preflight. Unauthenticated by design (browsers strip auth headers
+        # from preflights); end_headers() adds the Allow-Origin/Allow-Headers.
+        if not self._origin_ok():
+            return self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden origin"})
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.send_header("Content-Length", "0")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.end_headers()
 
     def do_GET(self):
         if not self._origin_ok():
@@ -527,12 +560,12 @@ def resolve_token(token_file):
 # Server bootstrap.
 # ---------------------------------------------------------------------------
 
-def build_server(port, token, store):
+def build_server(host, port, token, store):
     handler_cls = type("BoundGhshotHandler", (GhshotHandler,), {
         "token": token,
         "store": store,
     })
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler_cls)
+    httpd = ThreadingHTTPServer((host, port), handler_cls)
     httpd.daemon_threads = True
     return httpd
 
@@ -540,14 +573,22 @@ def build_server(port, token, store):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="ghshot-bridge",
-        description="Local long-poll HTTP bridge for the ghshot Chrome "
-                    "extension. Binds 127.0.0.1 only.",
+        description="Long-poll HTTP bridge for the ghshot Chrome extension. "
+                    "Binds 127.0.0.1 by default; use --host to expose it to a "
+                    "browser on another machine.",
     )
+    default_host = os.environ.get("GHSHOT_BRIDGE_HOST") or DEFAULT_HOST
     default_port = int(os.environ.get("GHSHOT_BRIDGE_PORT") or DEFAULT_PORT)
     parser.add_argument(
+        "--host", default=default_host,
+        help="Address to bind (default: $GHSHOT_BRIDGE_HOST or %s). Set a "
+             "private address reachable from the browser's machine to use a "
+             "remote browser; it stays token-gated and origin-guarded, so only "
+             "bind an address on a trusted network." % DEFAULT_HOST,
+    )
+    parser.add_argument(
         "--port", type=int, default=default_port,
-        help="TCP port to bind on 127.0.0.1 "
-             "(default: $GHSHOT_BRIDGE_PORT or %d)" % DEFAULT_PORT,
+        help="TCP port to bind (default: $GHSHOT_BRIDGE_PORT or %d)" % DEFAULT_PORT,
     )
     parser.add_argument(
         "--token-file", default=DEFAULT_TOKEN_FILE,
@@ -568,15 +609,15 @@ def main(argv=None):
 
     store = JobStore()
     try:
-        httpd = build_server(args.port, token, store)
+        httpd = build_server(args.host, args.port, token, store)
     except OSError as exc:
         sys.stderr.write(
-            "[ghshot-bridge] failed to bind 127.0.0.1:%d — %s\n"
-            % (args.port, exc)
+            "[ghshot-bridge] failed to bind %s:%d — %s\n"
+            % (args.host, args.port, exc)
         )
         return 1
 
-    url = "http://127.0.0.1:%d" % args.port
+    url = "http://%s:%d" % (args.host, args.port)
     sys.stderr.write(
         "[ghshot-bridge] v%s listening on %s\n" % (VERSION, url)
     )

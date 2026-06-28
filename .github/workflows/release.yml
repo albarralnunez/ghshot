@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build a release for, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >>"$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Build extension zip
+        run: |
+          make zip
+          # Stable, version-less copy so README can link
+          # /releases/latest/download/ghshot-extension.zip forever.
+          cp dist/ghshot-extension-*.zip dist/ghshot-extension.zip
+          ls -l dist/
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum ./*.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.zip dist/SHA256SUMS --clobber
+          else
+            gh release create "$TAG" dist/*.zip dist/SHA256SUMS \
+              --title "ghshot $TAG" --generate-notes
+          fi

@@ -54,8 +54,27 @@ It auto-creates a token at `~/.config/ghshot/bridge-token` (chmod 0600) unless
 
 ### 3. The Chrome extension
 
+Get the extension one of two ways:
+
+- **From the latest release (no clone needed)** — download and unzip:
+
+  ```bash
+  curl -fsSL -o ghshot-extension.zip \
+    https://github.com/albarralnunez/ghshot/releases/latest/download/ghshot-extension.zip
+  unzip ghshot-extension.zip -d ghshot-extension
+  ```
+
+  ([latest release page](https://github.com/albarralnunez/ghshot/releases/latest) ·
+  [direct download](https://github.com/albarralnunez/ghshot/releases/latest/download/ghshot-extension.zip) —
+  both always point at the newest version.)
+
+- **From a clone** — just use the `extension/` directory in this repo.
+
+Then load it:
+
 1. Open `chrome://extensions`, enable **Developer mode**.
-2. **Load unpacked** → select the `extension/` directory.
+2. **Load unpacked** → select the unzipped `ghshot-extension/` folder (or the repo's
+   `extension/` directory).
 3. Open the extension's **Options**, set:
    - **Bridge URL**: `http://127.0.0.1:41330` (default)
    - **Token**: the value from `bridge/ghshot-bridge --print-token`
@@ -64,11 +83,37 @@ It auto-creates a token at `~/.config/ghshot/bridge-token` (chmod 0600) unless
 Keep Chrome open and signed in to github.com. The extension long-polls the bridge and
 performs uploads from your session. **No cookies are exported and no password is stored.**
 
+## Remote bridge & multiple bridges
+
+The CLI/bridge and your browser don't have to be on the same machine. To upload from a
+project on **machine A** while the browser/session lives on **machine B**, bind the bridge
+to a private address both can reach and point the extension at it:
+
+```bash
+# on machine A (where ghshot runs):
+ghshot-bridge --host 10.0.0.5            # an address machine B can reach; or GHSHOT_BRIDGE_HOST=...
+export GHSHOT_BRIDGE_URL=http://10.0.0.5:41330   # so the CLI hits the same address
+```
+
+Then in the extension **Options** on machine B, add a bridge with URL
+`http://10.0.0.5:41330` and that bridge's token. The bridge stays **token-gated and
+origin-guarded**, but is now reachable on the chosen interface — only bind an address on a
+**trusted private network** (never `0.0.0.0` on a public one).
+
+The extension supports **multiple bridges** at once — add as many URL+token pairs as you
+like (e.g. a local `127.0.0.1` bridge and a remote one); it polls them all and handles
+whichever has a job. (The extension reaches a bridge at any address via the bridge's own
+CORS headers, so a remote bridge needs no extra extension permission — just a reachable
+URL and its token.)
+
 ## Quickstart
 
 ```bash
 ghshot.sh shot.png                      # → inline markdown for the current repo
 ghshot.sh --pr 42 shot.png              # upload + comment on PR #42
+ghshot.sh --pr shot.png                 # no number → the current branch's PR
+ghshot.sh --pick shot.png               # interactively pick repo + PR (needs fzf)
+ghshot.sh --repo owner/name --pr 42 shot.png   # target a repo from any directory
 ghshot.sh --issue 10 bug.png            # upload + comment on issue #10
 ghshot.sh --raw shot.png                # raw URL only
 ghshot.sh --json shot.png               # {"url","markdown","visibility"}
@@ -113,6 +158,27 @@ npx skills remove albarralnunez/ghshot     # remove the skill
 # stop the bridge (Ctrl-C) and rm -f ~/.config/ghshot/bridge-token
 # chrome://extensions → Remove "ghshot"
 ```
+
+## Publishing the extension
+
+The extension is store-ready. To package it:
+
+```bash
+make zip          # → dist/ghshot-extension-<version>.zip
+```
+
+Upload that zip in the [Chrome Web Store dashboard](https://chrome.google.com/webstore/devconsole)
+(one-time $5 developer registration). Listing copy and permission justifications are in
+[`store/listing.md`](./store/listing.md); replace the placeholder
+[`store/screenshot-1.png`](./store/) with real captures (see [`store/README.md`](./store/README.md)).
+Icons live in `extension/icons/` and are regenerated with `make assets`.
+
+Privacy policy: [`PRIVACY.md`](./PRIVACY.md) (also the policy URL for the store form).
+
+Tip: for personal/small-team use you don't need the store at all — **Load unpacked** the
+`extension/` directory from `chrome://extensions`. The store is only for wider, searchable
+distribution (expect a permissions-justification review because of the github.com host
+access). The same MV3 build also works on Firefox (AMO).
 
 ## Credits
 
