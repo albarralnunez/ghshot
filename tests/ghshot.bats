@@ -192,3 +192,16 @@ teardown() { rm -rf "$TMP"; }
   [ "$status" -eq 0 ]
   grep -q 'pr comment 7 --repo acme/widgets' "$GH_LOG"
 }
+
+@test "--pr with no number targets the current branch's PR" {
+  GH_LOG="$TMP/gh.log"
+  run env GH_STUB_LOG="$GH_LOG" GH_STUB_PR=314 bash "$SCRIPT" --pr "$IMG"
+  [ "$status" -eq 0 ]
+  grep -q 'pr comment 314' "$GH_LOG"
+}
+
+@test "--pr without a number AND --repo (other repo) requires a number" {
+  run bash "$SCRIPT" --repo acme/widgets --pr "$IMG"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"PR number is required"* ]]
+}

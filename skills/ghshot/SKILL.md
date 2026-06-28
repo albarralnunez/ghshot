@@ -2,13 +2,13 @@
 name: ghshot
 description: Upload an image (screenshot, diagram) to a GitHub PR, issue, or comment and get a markdown-ready URL. GitHub has no API for image upload and `gh` can't do it. ghshot uploads through your OWN logged-in github.com browser session via a tiny local bridge + a Chrome extension (no cookie extraction, no stored secret), producing a github.com/user-attachments URL that renders inline and is access-controlled to people who can see the repo — works on PRIVATE repos. Use when asked to attach/embed a screenshot, post a before/after image, or add a picture to a PR/issue/comment.
 license: MIT
-argument-hint: "<image-path> [--pr N | --issue N]"
+argument-hint: "<image-path> [--pr [N] | --issue N | --pick] [--repo owner/name]"
 allowed-tools:
   - Bash(gh:*)
   - Bash(bash:*)
 metadata:
   author: albarralnunez
-  version: 0.4.0
+  version: 0.5.0
 ---
 
 # ghshot — upload images to GitHub
@@ -27,6 +27,8 @@ Run the script **by its full path in this skill's directory** — never a bare `
 # SKILL_DIR = the directory that contains this SKILL.md
 "$SKILL_DIR/ghshot.sh" shot.png                 # → ![shot](https://github.com/user-attachments/assets/<uuid>)
 "$SKILL_DIR/ghshot.sh" --pr 42 shot.png         # upload + comment on PR #42 (--issue N for issues)
+"$SKILL_DIR/ghshot.sh" --pr shot.png            # no number → the current branch's PR
+"$SKILL_DIR/ghshot.sh" --pick shot.png          # interactively pick repo + PR (needs fzf)
 "$SKILL_DIR/ghshot.sh" --repo owner/name --pr 42 shot.png   # target a repo from ANY directory
 "$SKILL_DIR/ghshot.sh" --pr 42 before.png after.png   # multiple images, one comment
 "$SKILL_DIR/ghshot.sh" --raw shot.png           # raw URL only (for embedding in your own text)

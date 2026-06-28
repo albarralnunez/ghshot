@@ -75,9 +75,23 @@ case "$cmd" in
     ;;
 
   pr | issue)
-    # gh <pr|issue> comment <N> --body-file -   → consume stdin, succeed
-    cat >/dev/null 2>&1 || true
-    exit 0
+    case "$sub" in
+      view)
+        # gh pr view --json number -q .number  → current branch's PR
+        printf '%s\n' "${GH_STUB_PR:-99}"
+        exit 0
+        ;;
+      list)
+        # gh pr list ... -q '.[] | "#\(.number)\t..."'  (used by --pick)
+        printf '#101\tfeature-x\tAdd X\n#102\tfix-y\tFix Y\n'
+        exit 0
+        ;;
+      comment | *)
+        # gh <pr|issue> comment <N> ... --body-file -  → consume stdin, succeed
+        cat >/dev/null 2>&1 || true
+        exit 0
+        ;;
+    esac
     ;;
 
   *)

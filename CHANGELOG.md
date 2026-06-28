@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-27
+
+### Added
+
+- **`--pr` / `--issue` accept an optional number.** `--pr` with no number targets the
+  **current branch's PR** (resolved via `gh`). 
+- **`--pick`** — interactively choose the target **repo + PR** with `fzf` (the PR list
+  shows each PR's branch). Falls back to picking a repo from `gh repo list` when the repo
+  isn't otherwise resolvable.
+
 ## [0.4.0] - 2026-06-27
 
 ### Added
@@ -107,7 +117,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CI (shellcheck, shfmt, py_compile, bats on Ubuntu + macOS), issue/PR templates,
   dependabot, and hermetic bats tests with a `gh` stub.
 
-[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/albarralnunez/ghshot/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/albarralnunez/ghshot/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/albarralnunez/ghshot/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/albarralnunez/ghshot/compare/v0.2.1...v0.3.0

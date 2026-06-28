@@ -15,8 +15,10 @@
 #   ghshot.sh [options] <image>...
 #
 # Options:
-#   --pr N            upload all images, then post ONE comment on PR #N
+#   --pr [N]          upload all images, then post ONE comment on PR #N
+#                     (no number → the current branch's PR)
 #   --issue N         same, but on issue #N
+#   --pick            interactively pick the repo + PR as the target (needs fzf)
 #   --repo OWNER/NAME target repo for the attachment AND the --pr/--issue comment
 #                     (default: GHSHOT_REPO, else `gh repo view` in the cwd)
 #   --raw             print only the first raw URL (no markdown)
@@ -39,7 +41,7 @@
 # --force bypasses them only when you are sure.
 set -euo pipefail
 
-VERSION="0.4.0"
+VERSION="0.5.0"
 MAX_BYTES_DEFAULT=26214400 # 25 MiB
 
 die() {
@@ -48,7 +50,7 @@ die() {
 }
 
 usage() {
-  sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//; s/^#//'
+  sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//; s/^#//'
 }
 
 # ---- defaults (env, then overridable by flags) ----
@@ -56,6 +58,7 @@ mode="markdown" # markdown | raw | json
 target_kind=""  # pr | issue
 target_num=""
 repo_opt=""
+pick=0
 force=0
 files=()
 [ "${GHSHOT_FORCE:-}" = 1 ] && force=1
@@ -74,17 +77,32 @@ while [ $# -gt 0 ]; do
       ;;
     --pr)
       target_kind="pr"
-      target_num="${2:-}"
-      shift 2 || shift
+      # number is optional: consume the next token only if it is numeric
+      case "${2:-}" in
+        '' | *[!0-9]*) shift ;;
+        *)
+          target_num="$2"
+          shift 2
+          ;;
+      esac
       ;;
     --issue)
       target_kind="issue"
-      target_num="${2:-}"
-      shift 2 || shift
+      case "${2:-}" in
+        '' | *[!0-9]*) shift ;;
+        *)
+          target_num="$2"
+          shift 2
+          ;;
+      esac
       ;;
     --repo)
       repo_opt="${2:-}"
       shift 2 || shift
+      ;;
+    --pick)
+      pick=1
+      shift
       ;;
     --force | -f)
       force=1
@@ -114,10 +132,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ -n "$target_kind" ]; then
-  case "$target_num" in
-    '' | *[!0-9]*) die "--$target_kind needs a number, e.g. --$target_kind 42" ;;
-  esac
+# A number (when given) must be numeric; an empty number is resolved later
+# (--pick, or auto-detect the current branch's PR for --pr).
+if [ -n "$target_num" ]; then
+  case "$target_num" in *[!0-9]*) die "--$target_kind number must be numeric, got: $target_num" ;; esac
 fi
 [ "${#files[@]}" -gt 0 ] || die "no image given. usage: ghshot [options] <image>...  (see --help)"
 case "$max_bytes" in '' | *[!0-9]*) die "GHSHOT_MAX_BYTES must be an integer, got: $max_bytes" ;; esac
@@ -151,9 +169,15 @@ command -v curl >/dev/null 2>&1 || die "curl not found — required by ghshot"
 need_gh=0
 [ -z "$repo_opt" ] && [ -z "${GHSHOT_REPO:-}" ] && need_gh=1
 [ -n "$target_kind" ] && need_gh=1
+[ "$pick" = 1 ] && need_gh=1
+[ "$pick" = 1 ] && [ -z "$target_num" ] && need_gh=1
 if [ "$need_gh" = 1 ]; then
   command -v gh >/dev/null 2>&1 || die "gh CLI not found — install from https://cli.github.com"
   gh auth status >/dev/null 2>&1 || die "gh not authenticated — run: gh auth login"
+fi
+# --pick is interactive (needs fzf + a terminal)
+if [ "$pick" = 1 ]; then
+  command -v fzf >/dev/null 2>&1 || die "--pick needs fzf"
 fi
 
 # refuse-by-default guard (enforced even for agents); --force / GHSHOT_FORCE overrides
@@ -177,15 +201,48 @@ vet_file() {
   fi
 }
 
-# Resolve the repo to attach to: GHSHOT_REPO, else `gh repo view` in the current dir.
+# Resolve the repo to attach to: --repo > GHSHOT_REPO > `gh repo view` (cwd) >
+# (with --pick) an fzf picker over your repos.
 resolve_repo() {
   local r
   r="${repo_opt:-${GHSHOT_REPO:-}}"
   if [ -z "$r" ]; then
     r="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
   fi
-  [ -n "$r" ] || die "could not resolve repo — pass --repo owner/name, set GHSHOT_REPO, or run inside a git repo with a GitHub remote"
+  if [ -z "$r" ] && [ "$pick" = 1 ]; then
+    r="$(gh repo list --limit 200 --json nameWithOwner -q '.[].nameWithOwner' 2>/dev/null |
+      fzf --prompt='repo> ' --height=40% --reverse || true)"
+  fi
+  [ -n "$r" ] || die "could not resolve repo — pass --repo owner/name, set GHSHOT_REPO, run inside a git repo, or use --pick"
   printf '%s' "$r"
+}
+
+# Resolve the comment target (PR/issue number) when it wasn't given explicitly:
+#  --pick           -> fzf-choose an open PR of the repo
+#  --pr (no number) -> the current branch's PR (resolved by gh in the cwd)
+resolve_target() {
+  if [ "$pick" = 1 ] && [ -z "$target_num" ]; then
+    local sel
+    sel="$(gh pr list --repo "$attach_repo" --state open --limit 100 \
+      --json number,title,headRefName -q '.[] | "#\(.number)\t\(.headRefName)\t\(.title)"' 2>/dev/null |
+      fzf --delimiter='\t' --with-nth=1,2,3 --height=60% --reverse \
+        --prompt="PR @ $attach_repo > ")" || true
+    [ -n "$sel" ] || die "no PR selected"
+    target_kind="pr"
+    sel="${sel%%	*}"
+    target_num="${sel#\#}"
+  fi
+  [ -n "$target_kind" ] || return 0
+  if [ -z "$target_num" ]; then
+    case "$target_kind" in
+      pr)
+        [ -z "$repo_opt" ] || die "a PR number is required with --repo (or use --pick)"
+        target_num="$(gh pr view --json number -q .number 2>/dev/null || true)"
+        [ -n "$target_num" ] || die "no PR found for the current branch — pass --pr N or use --pick"
+        ;;
+      issue) die "--issue needs a number (or use --pick to choose a PR)" ;;
+    esac
+  fi
 }
 
 # Upload one image through the bridge -> extension -> your github.com session.
@@ -210,8 +267,9 @@ upload_one() {
 
 # Resolve the target repo once in the parent shell — upload_one runs inside a
 # $() subshell, so resolving there would not persist, and the --pr/--issue
-# comment below needs it too.
+# comment below needs it too. Then resolve the PR/issue target (pick/auto).
 attach_repo="$(resolve_repo)"
+resolve_target
 
 # ---- upload everything, build markdown (always inline) ----
 md=""
