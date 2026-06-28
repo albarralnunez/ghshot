@@ -41,7 +41,8 @@ teardown() { rm -rf "$TMP"; }
   run bash "$SCRIPT" --help
   [ "$status" -eq 0 ]
   [[ "$output" == *"browser session"* ]]
-  [[ "$output" == *"--pr N"* ]]
+  [[ "$output" == *"--pr"* ]]
+  [[ "$output" == *"--pick"* ]]
 }
 
 @test "no image given is an error" {
@@ -56,10 +57,10 @@ teardown() { rm -rf "$TMP"; }
   [[ "$output" == *"unknown flag"* ]]
 }
 
-@test "--pr requires a number" {
-  run bash "$SCRIPT" --pr abc "$IMG"
+@test "a non-numeric token after --pr is treated as a file, not a PR number" {
+  run env GH_STUB_PR=99 bash "$SCRIPT" --pr nope-not-a-number.png
   [ "$status" -ne 0 ]
-  [[ "$output" == *"needs a number"* ]]
+  [[ "$output" == *"file not found"* ]]
 }
 
 @test "--issue requires a number" {
