@@ -324,7 +324,9 @@ async function pollBridge(url, gen) {
 
       let pollResp;
       try {
-        pollResp = await fetch(url + POLL_PATH, { headers: { [TOKEN_HEADER]: token } });
+        // redirect:"error" so the X-Ghshot-Token header is never forwarded to a
+        // redirect target (custom headers survive cross-origin redirects).
+        pollResp = await fetch(url + POLL_PATH, { headers: { [TOKEN_HEADER]: token }, redirect: "error" });
       } catch (err) {
         console.debug("[ghshot] poll network error (%s), backing off:", url, String(err));
         await sleep(NETWORK_RETRY_MS);
@@ -359,7 +361,7 @@ async function handleJob(bridgeUrl, token, job) {
     if (!RE_REPO.test((job && job.repo) || "")) {
       throw new Error(`invalid repo "${job && job.repo}" (expected owner/name)`);
     }
-    const blobResp = await fetch(bridgeUrl + job.blob, { headers: { [TOKEN_HEADER]: token } });
+    const blobResp = await fetch(bridgeUrl + job.blob, { headers: { [TOKEN_HEADER]: token }, redirect: "error" });
     if (!blobResp.ok) {
       throw new Error(`failed to fetch image from bridge: HTTP ${blobResp.status}`);
     }
@@ -379,6 +381,7 @@ async function handleJob(bridgeUrl, token, job) {
       method: "POST",
       headers: { [TOKEN_HEADER]: token, "Content-Type": "application/json" },
       body: JSON.stringify(result),
+      redirect: "error",
     });
   } catch (err) {
     console.debug("[ghshot] failed to post result for job %s:", job.id, String(err));

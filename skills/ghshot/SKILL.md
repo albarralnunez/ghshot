@@ -8,7 +8,7 @@ allowed-tools:
   - Bash(bash:*)
 metadata:
   author: albarralnunez
-  version: 0.5.0
+  version: 0.6.0
 ---
 
 # ghshot — upload images to GitHub
@@ -32,7 +32,7 @@ Run the script **by its full path in this skill's directory** — never a bare `
 "$SKILL_DIR/ghshot.sh" --repo owner/name --pr 42 shot.png   # target a repo from ANY directory
 "$SKILL_DIR/ghshot.sh" --pr 42 before.png after.png   # multiple images, one comment
 "$SKILL_DIR/ghshot.sh" --raw shot.png           # raw URL only (for embedding in your own text)
-"$SKILL_DIR/ghshot.sh" --json shot.png          # {"url","markdown","visibility"} — for agents
+"$SKILL_DIR/ghshot.sh" --json shot.png          # {"url","markdown"} — for agents
 ```
 
 stdout is pipe-safe (only the URL/markdown); progress goes to stderr. You can pipe it:

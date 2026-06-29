@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-28
+
+Security-hardening release (defense-in-depth across the CLI, bridge, extension, and CI).
+
+### Changed (breaking)
+
+- **`--json` no longer emits a `visibility` field.** It was hardcoded to `"private"` and
+  never reflected the repo's real visibility (wrong, in the unsafe direction, for public
+  repos). Output is now `{"url","markdown"}`. Compute visibility yourself if you need it.
+
+### Security / hardening
+
+- **CLI:** the bridge-returned URL is now restricted to GitHub attachment URLs
+  (`github.com/user-attachments/assets/…` or `*.githubusercontent.com`) and rejected if it
+  contains Markdown metacharacters; image alt text derived from filenames is Markdown-escaped
+  (prevents comment injection and fixes benign `[]()` filenames); the file is uploaded over
+  **stdin** so a crafted path can't smuggle curl `;type=`/`;headers=` modifiers or read a
+  different file than the one vetted; the bridge token is passed via a `0600` header file,
+  never on the command line (`/proc/<pid>/cmdline`); `vet_file` resolves symlinks and
+  re-checks the target's name; `GHSHOT_REPO` is validated like `--repo`; `json_escape` now
+  escapes all control characters.
+- **Bridge:** added a `Host`-header allowlist (anti-DNS-rebinding), a connection read
+  timeout (anti-Slowloris/dead-client), rejection of chunked `Transfer-Encoding`, a smaller
+  32 MiB body cap, filename log-sanitization, server-side validation of the reported result
+  URL, and atomic `O_EXCL|O_NOFOLLOW` token-file creation (never returns an empty token).
+- **Extension:** dropped the broad `tabs` permission (the github.com host permission
+  suffices); bridge fetches use `redirect: "error"` so the token header can't be forwarded
+  across a redirect; options page warns against plain-HTTP remote bridges.
+- **CI/release:** pinned `actions/checkout` to a commit SHA; verify the `shfmt` download by
+  SHA-256; pinned `bats-core` to `v1.13.0` + commit check; fixed `workflow_dispatch` tag
+  expression injection (routed via env); added build-provenance attestation for release zips.
+- **Docs:** corrected the "loopback only / never reachable" claims to reflect the opt-in
+  `--host` remote mode and its reduced (token + origin/host guard) threat model.
+
 ## [0.5.0] - 2026-06-27
 
 ### Added

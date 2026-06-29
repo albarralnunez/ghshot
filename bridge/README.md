@@ -7,7 +7,7 @@ repos. No cookies are extracted and no secret is stored.
 
 ```
 CLI (curl) ──HTTP──▶ ghshot-bridge ◀──HTTP long-poll── Chrome extension ──fetch──▶ github.com
-                     (127.0.0.1 only)                  (your logged-in session)
+                   (127.0.0.1 by default)             (your logged-in session)
 ```
 
 The bridge never talks to GitHub itself. It just hands an image to the
@@ -63,8 +63,14 @@ extension without scrolling the logs.
 
 ## Security model
 
-- **Loopback only.** The listener binds `127.0.0.1`; it is not reachable off
-  the machine.
+- **Loopback by default.** The listener binds `127.0.0.1`. It can be bound
+  elsewhere with `--host`/`GHSHOT_BRIDGE_HOST` to reach it from another machine;
+  in that mode it is reachable by anything that can route to the address, so only
+  bind a trusted private network (never `0.0.0.0` on a public one) and prefer an
+  encrypted transport — plain `http://` sends the token and image in the clear.
+- **Host guard.** Requests whose `Host` is a DNS name other than the configured
+  bind host are rejected (IP literals and `localhost` allowed), blunting DNS
+  rebinding. Chunked `Transfer-Encoding` is not accepted.
 - **Token auth.** Every endpoint except `GET /healthz` requires the
   `X-Ghshot-Token` request header to equal the token.
 - **Origin guard.** Any request carrying an `Origin` header that starts with

@@ -11,21 +11,41 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # On dispatch, build from the requested tag (not the branch the run was
+          # launched from) so the published + attested artifacts match the tag.
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Resolve tag
         id: tag
+        env:
+          # Route the dispatch input through the environment, never interpolated
+          # into the shell, to avoid expression injection.
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >>"$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="${DISPATCH_TAG}"
           else
-            echo "tag=${GITHUB_REF_NAME}" >>"$GITHUB_OUTPUT"
+            TAG="${GITHUB_REF_NAME}"
           fi
+          # Reject anything but a plain tag so it cannot inject extra
+          # GITHUB_OUTPUT keys or shell.
+          case "$TAG" in
+            "" | *[!A-Za-z0-9._/-]*)
+              echo "invalid tag: '$TAG'" >&2
+              exit 1
+              ;;
+          esac
+          echo "tag=${TAG}" >>"$GITHUB_OUTPUT"
 
       - name: Build extension zip
         run: |
@@ -40,6 +60,11 @@ jobs:
           cd dist
           sha256sum ./*.zip > SHA256SUMS
           cat SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: "dist/*.zip"
 
       - name: Publish release assets
         env:

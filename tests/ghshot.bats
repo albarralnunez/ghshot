@@ -125,11 +125,12 @@ teardown() { rm -rf "$TMP"; }
   [[ "$output" != *'!['* ]]
 }
 
-@test "--json reports visibility private and a url" {
+@test "--json emits url and markdown, with no visibility field" {
   run bash "$SCRIPT" --json "$IMG"
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"visibility":"private"'* ]]
   [[ "$output" == *'"url":"https://github.com/user-attachments/assets/'* ]]
+  [[ "$output" == *'"markdown":"'* ]]
+  [[ "$output" != *visibility* ]]
 }
 
 @test "multiple images produce one markdown line each" {
@@ -205,4 +206,51 @@ teardown() { rm -rf "$TMP"; }
   run bash "$SCRIPT" --repo acme/widgets --pr "$IMG"
   [ "$status" -ne 0 ]
   [[ "$output" == *"PR number is required"* ]]
+}
+
+# ---- hardening guards ------------------------------------------------------
+
+@test "escapes markdown metacharacters in filename-derived alt text" {
+  cp "$IMG" "$TMP/x)y.png"
+  run bash "$SCRIPT" "$TMP/x)y.png"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'x\)y'* ]]
+}
+
+@test "rejects a bridge URL containing markdown metacharacters" {
+  run env CURL_STUB_URL='https://github.com/user-attachments/assets/x)evil' bash "$SCRIPT" "$IMG"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"bad URL"* ]]
+}
+
+@test "rejects a bridge URL containing control characters" {
+  run env CURL_STUB_URL=$'https://github.com/user-attachments/assets/x\x1by' bash "$SCRIPT" "$IMG"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"control characters"* ]]
+}
+
+@test "rejects a non-GitHub https URL from the bridge" {
+  run env CURL_STUB_URL='https://evil.example/x' bash "$SCRIPT" "$IMG"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not a GitHub attachment URL"* ]]
+}
+
+@test "accepts a githubusercontent.com URL from the bridge" {
+  run env CURL_STUB_URL='https://avatars.githubusercontent.com/u/1' bash "$SCRIPT" --raw "$IMG"
+  [ "$status" -eq 0 ]
+  [[ "$output" == https://avatars.githubusercontent.com/* ]]
+}
+
+@test "GHSHOT_REPO with invalid characters is rejected like --repo" {
+  run env GHSHOT_REPO='a/b;c' bash "$SCRIPT" --json "$IMG"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"invalid characters"* ]]
+}
+
+@test "refuses a symlink whose resolved target looks sensitive" {
+  printf 'x' >"$TMP/id_rsa"
+  ln -s "$TMP/id_rsa" "$TMP/pic.png"
+  run bash "$SCRIPT" "$TMP/pic.png"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"sensitive"* ]]
 }

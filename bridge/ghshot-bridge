@@ -19,6 +19,7 @@ used; multipart bodies are parsed with the `email` package.
 """
 
 import argparse
+import ipaddress
 import json
 import mimetypes
 import os
@@ -32,9 +33,9 @@ from email.parser import BytesParser
 from email.policy import default as email_default_policy
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, urlsplit, parse_qs
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 41330
 DEFAULT_TOKEN_FILE = os.path.expanduser("~/.config/ghshot/bridge-token")
@@ -44,8 +45,21 @@ TOKEN_HEADER = "X-Ghshot-Token"
 # repo: alnum . _ -). Blocks path traversal / log injection via the repo field.
 REPO_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+$")
 
-# Hard cap on a request body read into memory (loopback DoS guard).
-MAX_BODY_BYTES = 64 * 1024 * 1024  # 64 MiB
+# A finalized GitHub attachment URL (what the extension reports back). The
+# bridge rejects anything else so a buggy/hostile result cannot smuggle an
+# arbitrary URL (or Markdown metacharacters) through to the CLI's comment body.
+RESULT_URL_RE = re.compile(
+    r"^https://github\.com/user-attachments/assets/[0-9a-fA-F-]+\Z"
+    # Path chars restricted to a printable RFC-3986 allowlist (no whitespace,
+    # control chars, parens/brackets/backtick) so a hostile result can't smuggle
+    # Markdown or terminal/log-escape sequences through to the CLI.
+    r"|^https://[A-Za-z0-9.-]+\.githubusercontent\.com/[A-Za-z0-9._~:/?#@!$&*+,;=%-]*\Z"
+)
+
+# Hard cap on a request body read into memory (loopback DoS guard). A few MiB
+# would cover any screenshot; 32 MiB leaves headroom above the CLI's 25 MiB
+# default while still bounding memory amplification.
+MAX_BODY_BYTES = 32 * 1024 * 1024  # 32 MiB
 
 # How long the CLI's /v1/upload blocks waiting for the final result.
 RESULT_WAIT_SECONDS = 120
@@ -204,6 +218,12 @@ def guess_content_type(filename, fallback="application/octet-stream"):
     return fallback
 
 
+def safe_for_log(value):
+    """Neutralize CR/LF and other control chars so an attacker-influenced field
+    (e.g. a multipart filename) cannot forge or split journald log lines."""
+    return re.sub(r"[\x00-\x1f\x7f]", "?", value or "")
+
+
 # ---------------------------------------------------------------------------
 # HTTP handler.
 # ---------------------------------------------------------------------------
@@ -212,9 +232,16 @@ class GhshotHandler(BaseHTTPRequestHandler):
     server_version = "ghshot-bridge/" + VERSION
     protocol_version = "HTTP/1.1"
 
+    # Drop a client that connects then stalls without finishing its request
+    # (Slowloris / a dead browser mid-request) instead of pinning a thread + fd
+    # forever. The long-poll waits block on a threading.Condition, not a socket
+    # read, so this per-operation socket timeout never aborts them.
+    timeout = 20
+
     # injected by the server factory below
     token = None
     store = None
+    allowed_hosts = None
 
     def end_headers(self):
         # CORS: extension *pages* (options/popup) do NOT get the host-permission
@@ -276,6 +303,45 @@ class GhshotHandler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _host_ok(self):
+        """Reject DNS-rebinding.
+
+        A real website cannot put a raw IP literal in the Host header it
+        controls, so only IP-literal hosts, localhost, and the configured bind
+        host are accepted. A missing Host is allowed (the CLI/curl always sends
+        one, and a rebinding page always carries a forged Host).
+        """
+        raw = self.headers.get("Host")
+        if not raw:
+            return True
+        host = (urlsplit("//" + raw).hostname or "").lower()
+        if host == "localhost":
+            return True
+        if self.allowed_hosts and host in self.allowed_hosts:
+            return True
+        try:
+            ipaddress.ip_address(host)
+            return True
+        except ValueError:
+            return False
+
+    def _reject_unsupported(self):
+        """Common pre-routing guards: chunked bodies (we only honor
+        Content-Length) and DNS-rebinding via the Host header. Returns True if
+        the request was rejected (caller should stop)."""
+        if self.headers.get("Transfer-Encoding"):
+            self.close_connection = True
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "chunked transfer-encoding is not supported"},
+            )
+            return True
+        if not self._host_ok():
+            self.close_connection = True
+            self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden host"})
+            return True
+        return False
+
     def _auth_ok(self):
         # constant-time comparison to avoid a token timing oracle
         return secrets.compare_digest(
@@ -290,27 +356,39 @@ class GhshotHandler(BaseHTTPRequestHandler):
 
     def _read_body(self):
         length = self._content_length()
+        # When we refuse to read the declared body, the unread bytes would
+        # desync a reused keep-alive connection, so close it.
         if length < 0:
+            self.close_connection = True
             raise ValueError("invalid Content-Length")
         if length > MAX_BODY_BYTES:
+            self.close_connection = True
             raise ValueError("body too large")
         if length == 0:
             return b""
         return self.rfile.read(length)
 
     def _drain_body(self):
-        # Read and discard any body so the connection can be reused.
+        # Read and discard any body so the connection can be reused. If the
+        # declared body exceeds our cap we cannot fully drain it, so the
+        # connection must be closed to avoid a keep-alive desync.
         length = self._content_length()
+        if length > MAX_BODY_BYTES:
+            self.close_connection = True
+            length = MAX_BODY_BYTES
         if length > 0:
-            self.rfile.read(min(length, MAX_BODY_BYTES))
+            self.rfile.read(length)
 
     # -- routing ------------------------------------------------------------
 
     def do_OPTIONS(self):
         # CORS preflight. Unauthenticated by design (browsers strip auth headers
         # from preflights); end_headers() adds the Allow-Origin/Allow-Headers.
+        if self._reject_unsupported():
+            return
         if not self._origin_ok():
             return self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden origin"})
+        self._drain_body()
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_header("Content-Length", "0")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -318,6 +396,8 @@ class GhshotHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if self._reject_unsupported():
+            return
         if not self._origin_ok():
             return self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden origin"})
         path = urlparse(self.path).path
@@ -338,6 +418,8 @@ class GhshotHandler(BaseHTTPRequestHandler):
         return self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
     def do_POST(self):
+        if self._reject_unsupported():
+            return
         if not self._origin_ok():
             self._drain_body()
             return self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden origin"})
@@ -410,7 +492,7 @@ class GhshotHandler(BaseHTTPRequestHandler):
 
         job = self.store.add(repo, filename, content_type, data)
         self.log_event("upload job=%s repo=%s file=%s (%d bytes)"
-                       % (job.id, repo, filename, len(data)))
+                       % (job.id, repo, safe_for_log(filename), len(data)))
         try:
             now = time.monotonic()
             status, payload = self.store.wait_for_result(
@@ -422,7 +504,7 @@ class GhshotHandler(BaseHTTPRequestHandler):
             self.store.remove(job.id)
 
         if status == "ok":
-            self.log_event("upload job=%s ok url=%s" % (job.id, payload))
+            self.log_event("upload job=%s ok url=%s" % (job.id, safe_for_log(payload)))
             if want_text:
                 return self._send_text(HTTPStatus.OK, payload)
             return self._send_json(HTTPStatus.OK, {"url": payload})
@@ -491,10 +573,17 @@ class GhshotHandler(BaseHTTPRequestHandler):
                 HTTPStatus.BAD_REQUEST, {"error": "missing id"}
             )
         if "url" in obj and obj["url"]:
-            ok = self.store.set_result(job_id, url=str(obj["url"]))
+            url = str(obj["url"])
+            if RESULT_URL_RE.match(url):
+                ok = self.store.set_result(job_id, url=url)
+            else:
+                self.log_event("result job=%s rejected unexpected url"
+                               % safe_for_log(str(job_id)))
+                ok = self.store.set_result(
+                    job_id, error="extension reported an unexpected URL")
         else:
             err = obj.get("error") or "extension reported an unknown error"
-            ok = self.store.set_result(job_id, error=str(err))
+            ok = self.store.set_result(job_id, error=safe_for_log(str(err)))
         if not ok:
             return self._send_json(
                 HTTPStatus.NOT_FOUND,
@@ -523,9 +612,26 @@ def resolve_token(token_file):
 
     Precedence: GHSHOT_BRIDGE_TOKEN env var > token file (auto-created).
     """
-    env_token = os.environ.get("GHSHOT_BRIDGE_TOKEN")
+    # Strip first, THEN test: a whitespace-only env value must not become an
+    # empty token (compare_digest("","") is True, which would disable auth).
+    # Fall through to the never-empty file path if it is blank.
+    env_token = (os.environ.get("GHSHOT_BRIDGE_TOKEN") or "").strip()
     if env_token:
-        return env_token.strip()
+        return env_token
+
+    directory = os.path.dirname(token_file) or "."
+
+    def _read_existing():
+        # Read without following a symlink at the final path component.
+        try:
+            fd = os.open(token_file, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError:
+            return None
+        try:
+            with os.fdopen(fd, "r", encoding="utf-8") as fh:
+                return fh.read().strip()
+        except OSError:
+            return None
 
     if os.path.exists(token_file):
         # Tighten perms if a pre-existing token file is group/other-accessible.
@@ -535,21 +641,32 @@ def resolve_token(token_file):
                 os.chmod(token_file, 0o600)
         except OSError:
             pass
-        with open(token_file, "r", encoding="utf-8") as fh:
-            existing = fh.read().strip()
+        existing = _read_existing()
         if existing:
             return existing
 
     # Auto-create a fresh token.
     token = secrets.token_hex(16)  # 32 hex chars
-    directory = os.path.dirname(token_file) or "."
     os.makedirs(directory, exist_ok=True)
     try:
         os.chmod(directory, 0o700)
     except OSError:
         pass
-    # Write with restrictive permissions from the start.
-    fd = os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        # Atomic create, no symlink follow, restrictive perms from the start.
+        fd = os.open(
+            token_file,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+    except FileExistsError:
+        # Raced, or an empty/whitespace-only file slipped past the read above.
+        # Never return an empty token (it would make compare_digest("","") true
+        # and authenticate every request) — reuse a real one or overwrite.
+        existing = _read_existing()
+        if existing:
+            return existing
+        fd = os.open(token_file, os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(token + "\n")
     os.chmod(token_file, 0o600)
@@ -561,9 +678,16 @@ def resolve_token(token_file):
 # ---------------------------------------------------------------------------
 
 def build_server(host, port, token, store):
+    # Hard backstop: an empty token would make compare_digest("","") authenticate
+    # every request. resolve_token never returns empty, but never serve on one.
+    if not token:
+        raise ValueError("refusing to start with an empty auth token")
+    bind_host = (host or "").strip().lower()
+    allowed_hosts = {bind_host} if bind_host else set()
     handler_cls = type("BoundGhshotHandler", (GhshotHandler,), {
         "token": token,
         "store": store,
+        "allowed_hosts": allowed_hosts,
     })
     httpd = ThreadingHTTPServer((host, port), handler_cls)
     httpd.daemon_threads = True

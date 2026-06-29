@@ -145,11 +145,13 @@ not publicly listable.
 ## Security model
 
 - **True access control.** The asset is visible only to accounts that can see the repo.
-- **No secret leaves the browser.** Your github.com session is never extracted; the only
-  thing on disk is the local bridge token (`~/.config/ghshot/bridge-token`, chmod 0600),
-  which only authorizes the loopback bridge.
+- **No GitHub credential leaves the browser.** Your github.com session is never extracted.
+  The only secret on disk is the local bridge token (`~/.config/ghshot/bridge-token`, chmod
+  0600); it authorizes the bridge to upload through your session, so anyone who holds it can
+  upload to repos you can write to while Chrome is open — treat it as a real credential.
 - **Never upload secrets anyway.** The skill refuses sensitive-looking filenames and
-  non-images by default; `--force` bypasses the guard only when you are sure.
+  non-images by default — a best-effort, filename-based guard (it does not inspect file
+  contents, and the bridge does not re-vet uploads); `--force` bypasses it.
 
 ## Uninstall
 

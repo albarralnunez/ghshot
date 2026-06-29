@@ -96,6 +96,11 @@
       bridge's <code>~/.config/ghshot/bridge-token</code> (or
       <code>ghshot-bridge --print-token</code>).
     </p>
+    <p class="hint">
+      Prefer a loopback bridge (<code>127.0.0.1</code>). A remote bridge over plain
+      <code>http://</code> sends the token and image bytes unencrypted — only use one
+      on a trusted private network.
+    </p>
 
     <div id="bridges"></div>
 

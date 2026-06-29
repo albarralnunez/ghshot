@@ -14,7 +14,7 @@ jobs:
     name: shell (shellcheck + shfmt)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: shellcheck
         run: |
@@ -24,9 +24,11 @@ jobs:
       - name: shfmt -d -i 2 -ci
         run: |
           SHFMT_VERSION=v3.8.0
-          curl -fsSL -o /usr/local/bin/shfmt \
+          SHFMT_SHA256=27b3c6f9d9592fc5b4856c341d1ff2c88856709b9e76469313642a1d7b558fe0
+          curl -fsSL -o /tmp/shfmt \
             "https://github.com/mvdan/sh/releases/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION}_linux_amd64"
-          chmod +x /usr/local/bin/shfmt
+          echo "${SHFMT_SHA256}  /tmp/shfmt" | sha256sum -c -
+          install -m 0755 /tmp/shfmt /usr/local/bin/shfmt
           shfmt --version
           shfmt -d -i 2 -ci skills/ghshot/ghshot.sh
 
@@ -34,7 +36,7 @@ jobs:
     name: bridge (py_compile)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: python3 version
         run: python3 --version
@@ -53,11 +55,19 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Install bats
         run: |
-          git clone --depth 1 https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats"
+          BATS_VERSION=v1.13.0
+          BATS_SHA=3bca150ec86275d6d9d5a4fd7d48ab8b6c6f3d87
+          git clone --depth 1 --branch "$BATS_VERSION" \
+            https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats"
+          got="$(git -C "$RUNNER_TEMP/bats" rev-parse HEAD)"
+          if [ "$got" != "$BATS_SHA" ]; then
+            echo "bats-core $BATS_VERSION HEAD $got != expected $BATS_SHA" >&2
+            exit 1
+          fi
           sudo "$RUNNER_TEMP/bats/install.sh" /usr/local
 
       - name: bats --version
