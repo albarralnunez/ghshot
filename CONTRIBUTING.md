@@ -24,7 +24,7 @@ If your change needs something outside these lists, open an issue first to discu
 skills/ghshot/   the CLI skill (ghshot.sh + SKILL.md)
 bridge/          the loopback HTTP bridge (single python3 executable)
 extension/       the MV3 Chrome extension
-tests/           bats tests + hermetic stubs, node scraper tests (no network)
+tests/           bats tests + hermetic stubs, node extension tests (no network)
 .github/         CI, issue/PR templates, dependabot
 ```
 
@@ -47,7 +47,7 @@ for f in extension/*.js; do node --check "$f"; done
 
 # tests (hermetic, no network)
 bats tests/
-node --test tests/scrape.test.js
+node --test tests/scrape.test.js tests/bridges.test.js
 ```
 
 `make lint test` runs all of the above.

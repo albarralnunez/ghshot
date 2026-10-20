@@ -20,7 +20,7 @@
 - [ ] Updated `README.md` / `SKILL.md` if behavior changed.
 - [ ] Added/updated a **hermetic** bats test (no real network) for CLI changes.
 - [ ] Ran `make lint test` locally (shellcheck, shfmt, py_compile, `node --check`, bats
-      and the node scraper tests).
+      and the node extension tests).
 
 ## Related issues
 

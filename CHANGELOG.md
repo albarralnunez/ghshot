@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-20
+
+### Added
+
+- **Extension:** Options gained **Import…** and **Export** for the bridge list, as a
+  `{"bridges": [{"url": …, "token": …}]}` JSON file. Import merges by URL, ignoring case — a
+  listed URL gets the file's token, a new URL is added, nothing is removed — and rejects
+  malformed files, URLs that are not `http(s)://host[:port]`, missing tokens and duplicates
+  whole, without echoing a token. Export writes the saved bridges that have a token and
+  warns that the file contains them.
+- **Bridge:** `--print-bridge-entry` prints this bridge's entry in that format from
+  `--host`/`--port` and the token file. It refuses a loopback or wildcard host unless
+  `--url` gives the address a remote browser should use (loopback shorthands such as
+  `127.1` and `0` included). `--url` must be `http(s)://host[:port]`.
+- Tests: `tests/bridge.bats` for the new flags, `tests/bridges.test.js` for Import/Export.
+
 ## [0.6.1] - 2026-10-20
 
 ### Fixed
@@ -179,7 +195,8 @@ Security-hardening release (defense-in-depth across the CLI, bridge, extension, 
   CI (shellcheck, shfmt, py_compile, bats on Ubuntu + macOS), issue/PR templates,
   dependabot, and hermetic bats tests with a `gh` stub.
 
-[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/albarralnunez/ghshot/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/albarralnunez/ghshot/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/albarralnunez/ghshot/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/albarralnunez/ghshot/compare/v0.4.0...v0.5.0

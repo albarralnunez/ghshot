@@ -15,6 +15,10 @@
       h1 {
         font-size: 1.3rem;
       }
+      h2 {
+        font-size: 1.05rem;
+        margin-top: 2rem;
+      }
       .hint {
         color: #57606a;
         font-size: 0.8rem;
@@ -111,6 +115,23 @@
 
     <div id="status"></div>
 
+    <h2>Import / export</h2>
+    <p class="hint">
+      <b>Import</b> reads a <code>{"bridges": [{"url": …, "token": …}]}</code> file, such as
+      the output of <code>ghshot-bridge --print-bridge-entry</code>, and merges it into the
+      saved bridges by URL: a URL already listed gets the file's token, a new URL is added,
+      and nothing is removed. Unsaved edits above are discarded.
+    </p>
+    <p class="hint">
+      <b>Export</b> saves the saved bridges in the same format. The file contains every
+      bridge's token in plain text: keep it private and delete it once imported.
+    </p>
+    <div class="row">
+      <button id="import">Import…</button>
+      <input id="import-file" type="file" accept=".json,application/json" hidden />
+      <button id="export">Export</button>
+    </div>
+
     <template id="bridge-tpl">
       <div class="bridge">
         <label>Bridge URL</label>
@@ -125,6 +146,7 @@
       </div>
     </template>
 
+    <script src="bridges.js"></script>
     <script src="options.js"></script>
   </body>
 </html>

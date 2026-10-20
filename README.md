@@ -117,6 +117,32 @@ whichever has a job. (The extension reaches a bridge at any address via the brid
 CORS headers, so a remote bridge needs no extra extension permission — just a reachable
 URL and its token.)
 
+### Import / export the bridge list
+
+Instead of pasting URLs and tokens by hand, each bridge host can print its own entry, and
+the extension's Options can **Import** it:
+
+```bash
+# on each bridge host — the output contains the token, so redirect it, never print it
+umask 077   # the file is a secret: keep it private to you
+ghshot-bridge --print-bridge-entry --host 10.0.0.5 > entry.json
+# behind NAT or DNS, give the URL the browser should use instead
+ghshot-bridge --print-bridge-entry --url http://build-box.example:41330 > entry.json
+# several hosts → one file
+jq -s '{bridges: map(.bridges[])}' entry-a.json entry-b.json > bridges.json
+```
+
+The format is `{"bridges": [{"url": …, "token": …}]}`. `--print-bridge-entry` refuses a
+loopback or wildcard `--host` (the default is `127.0.0.1`) unless `--url` is given, because
+such an entry is useless to a browser on another machine.
+
+In Options, **Import…** merges the file into the saved bridges **by URL** (case-insensitive):
+a URL already listed gets the file's token, a new URL is added, and nothing is removed.
+Unsaved edits on the page are discarded. A file with any invalid entry (not
+`http(s)://host[:port]`, no token, a duplicate URL) is rejected whole. **Export** writes the
+saved bridges that have a token in the same format. Both files carry tokens in plain text — keep them out of
+repos and delete them after the import.
+
 ## Quickstart
 
 ```bash

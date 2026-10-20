@@ -26,6 +26,7 @@ import os
 import re
 import secrets
 import signal
+import socket
 import sys
 import threading
 import time
@@ -35,7 +36,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, urlsplit, parse_qs
 
-VERSION = "0.6.1"
+VERSION = "0.7.0"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 41330
 DEFAULT_TOKEN_FILE = os.path.expanduser("~/.config/ghshot/bridge-token")
@@ -677,6 +678,62 @@ def resolve_token(token_file):
 # Server bootstrap.
 # ---------------------------------------------------------------------------
 
+def _host_ip(host):
+    """host as an ipaddress object, including the IPv4 shorthands the OS
+    resolver accepts ("0", "127.1"), or None for a name."""
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    if re.fullmatch(r"[0-9a-fA-Fx.]+", host):
+        try:
+            return ipaddress.IPv4Address(socket.inet_aton(host))
+        except OSError:
+            return None
+    return None
+
+
+def bridge_entry_url(host, port, url=None):
+    """The URL a browser on another machine should use for this bridge.
+
+    An explicit url wins (validated). Otherwise it is built from host/port,
+    refusing loopback and wildcard addresses: an entry that points a remote
+    browser at its own 127.0.0.1 or at 0.0.0.0 can never reach this bridge.
+    """
+    if url is not None:
+        raw = url.strip()
+        parts = urlsplit(raw)
+        try:
+            parts.port  # raises ValueError on a non-numeric or out-of-range port
+        except ValueError:
+            raise ValueError("--url has an invalid port, got %r" % url)
+        if (
+            parts.scheme not in ("http", "https")
+            or not parts.hostname
+            or parts.path not in ("", "/")
+            or "@" in parts.netloc
+            or any(c in raw for c in "?#\\%")
+        ):
+            raise ValueError("--url must be http(s)://host[:port] only, got %r" % url)
+        return raw.rstrip("/")
+    h = (host or "").strip().strip("[]")
+    if not h:
+        raise ValueError("no --host to build the URL from; pass --host or --url")
+    if "%" in h:
+        raise ValueError("--host %s has an IPv6 zone id, which browsers reject; pass --url" % h)
+    ip = _host_ip(h)
+    loopback = h.lower().rstrip(".") == "localhost" or bool(ip and ip.is_loopback)
+    unspecified = bool(ip and ip.is_unspecified)
+    if loopback or unspecified:
+        raise ValueError(
+            "--host %s is %s, so a browser on another machine cannot use it; "
+            "pass the address it should use with --host or --url"
+            % (h, "loopback" if loopback else "a wildcard address")
+        )
+    url_host = "[%s]" % h if ":" in h else h
+    return "http://%s:%d" % (url_host, port)
+
+
 def build_server(host, port, token, store):
     # Hard backstop: an empty token would make compare_digest("","") authenticate
     # every request. resolve_token never returns empty, but never serve on one.
@@ -723,12 +780,39 @@ def main(argv=None):
         "--print-token", action="store_true",
         help="Print the resolved auth token and exit.",
     )
+    parser.add_argument(
+        "--print-bridge-entry", action="store_true",
+        help="Print this bridge's entry for the extension's Import, as "
+             '{"bridges":[{"url":...,"token":...}]}, and exit. The URL comes '
+             "from --host/--port; a loopback or wildcard --host is refused "
+             "unless --url is given. The output contains the token.",
+    )
+    parser.add_argument(
+        "--url", default=None,
+        help="With --print-bridge-entry: the URL a remote browser uses to "
+             "reach this bridge, instead of one built from --host/--port.",
+    )
     args = parser.parse_args(argv)
+
+    if args.url is not None and not args.print_bridge_entry:
+        parser.error("--url only applies to --print-bridge-entry")
+    if args.print_token and args.print_bridge_entry:
+        parser.error("--print-token and --print-bridge-entry are mutually exclusive")
+
+    if args.print_bridge_entry:
+        try:
+            url = bridge_entry_url(args.host, args.port, args.url)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     token = resolve_token(args.token_file)
 
     if args.print_token:
         sys.stdout.write(token + "\n")
+        return 0
+
+    if args.print_bridge_entry:
+        sys.stdout.write(json.dumps({"bridges": [{"url": url, "token": token}]}) + "\n")
         return 0
 
     store = JobStore()

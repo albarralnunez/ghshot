@@ -7,6 +7,9 @@ const tpl = document.getElementById("bridge-tpl");
 const addButton = document.getElementById("add");
 const saveButton = document.getElementById("save");
 const statusEl = document.getElementById("status");
+const importButton = document.getElementById("import");
+const importFile = document.getElementById("import-file");
+const exportButton = document.getElementById("export");
 
 function setStatus(message, kind) {
   statusEl.textContent = message;
@@ -58,12 +61,18 @@ function addRow(url, token) {
   bridgesEl.appendChild(node);
 }
 
-async function load() {
+async function storedBridges() {
   const stored = await chrome.storage.local.get(["bridges", "bridgeUrl", "token"]);
   let list = Array.isArray(stored.bridges) ? stored.bridges : [];
   if (!list.length && (stored.bridgeUrl || stored.token)) {
     list = [{ url: stored.bridgeUrl || DEFAULT_BRIDGE_URL, token: stored.token || "" }];
   }
+  return list;
+}
+
+async function load() {
+  bridgesEl.replaceChildren();
+  let list = await storedBridges();
   if (!list.length) list = [{ url: DEFAULT_BRIDGE_URL, token: "" }];
   for (const b of list) addRow(b.url, b.token);
 }
@@ -95,7 +104,61 @@ async function save() {
   setStatus(`Saved ${bridges.length} bridge(s).`, "ok");
 }
 
+// Import merges into the SAVED list (see bridges.js), never replaces it.
+async function importBridges(file) {
+  let incoming;
+  try {
+    incoming = ghshotBridges.parseImport(await file.text());
+  } catch (err) {
+    setStatus(`Import failed: ${err.message}`, "err");
+    return;
+  }
+  try {
+    const { bridges, added, updated } = ghshotBridges.mergeBridges(await storedBridges(), incoming);
+    await chrome.storage.local.set({ bridges });
+    await chrome.storage.local.remove(["bridgeUrl", "token"]);
+    await load();
+    setStatus(
+      `Imported ${incoming.length} bridge(s): ${added} added, ${updated} token(s) updated, ` +
+        `${incoming.length - added - updated} unchanged. Delete the file now.`,
+      "ok"
+    );
+  } catch (err) {
+    setStatus(`Import failed: ${String((err && err.message) || err)}`, "err");
+  }
+}
+
+async function exportBridges() {
+  try {
+    const { text, count, skipped } = ghshotBridges.exportText(await storedBridges());
+    if (!count) {
+      setStatus("Nothing to export: no saved bridge has a token.", "err");
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "ghshot-bridges.json";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setStatus(
+      `Exported ${count} bridge(s)${skipped ? ` (${skipped} without a token skipped)` : ""}. ` +
+        "The file contains their tokens — keep it private.",
+      "ok"
+    );
+  } catch (err) {
+    setStatus(`Export failed: ${String((err && err.message) || err)}`, "err");
+  }
+}
+
 addButton.addEventListener("click", () => addRow("", ""));
 saveButton.addEventListener("click", save);
+importButton.addEventListener("click", () => importFile.click());
+importFile.addEventListener("change", () => {
+  const file = importFile.files && importFile.files[0];
+  importFile.value = "";
+  if (file) importBridges(file);
+});
+exportButton.addEventListener("click", exportBridges);
 
 load();

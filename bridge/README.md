@@ -52,14 +52,20 @@ agree automatically on the same machine.
 ### CLI flags
 
 ```
---port PORT            TCP port to bind on 127.0.0.1
+--host HOST            Address to bind (default 127.0.0.1)
+--port PORT            TCP port to bind
 --token-file PATH      Path to the auth token file
 --print-token          Print the resolved token and exit
+--print-bridge-entry   Print {"bridges":[{"url","token"}]} for the extension's Import
+--url URL              With --print-bridge-entry: the URL a remote browser uses
 --help                 Show usage
 ```
 
 `./ghshot-bridge --print-token` is handy for copying the token into the
-extension without scrolling the logs.
+extension without scrolling the logs. `--print-bridge-entry` prints the same
+token inside a file the extension's Options can **Import**; it refuses a
+loopback or wildcard `--host` unless `--url` is given. Redirect its output to a
+file rather than printing it to a shared terminal.
 
 ## Security model
 
