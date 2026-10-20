@@ -44,6 +44,10 @@
         border: 1px solid #d0d7de;
         border-radius: 6px;
       }
+      .token-row {
+        display: flex;
+        gap: 0.5rem;
+      }
       .bridge-actions {
         margin-top: 0.75rem;
         display: flex;
@@ -137,7 +141,10 @@
         <label>Bridge URL</label>
         <input class="b-url" type="text" placeholder="http://127.0.0.1:41330" />
         <label>Token</label>
-        <input class="b-token" type="text" autocomplete="off" placeholder="paste the bridge token" />
+        <div class="token-row">
+          <input class="b-token" type="password" autocomplete="off" spellcheck="false" placeholder="paste the bridge token" />
+          <button class="b-show" type="button" title="Show the token while held down">Show</button>
+        </div>
         <div class="bridge-actions">
           <button class="b-test">Test connection</button>
           <button class="b-remove danger">Remove</button>

@@ -47,7 +47,7 @@ for f in extension/*.js; do node --check "$f"; done
 
 # tests (hermetic, no network)
 bats tests/
-node --test tests/scrape.test.js tests/bridges.test.js
+node --test tests/scrape.test.js tests/bridges.test.js tests/options.test.js
 ```
 
 `make lint test` runs all of the above.

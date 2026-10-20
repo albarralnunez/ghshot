@@ -88,4 +88,4 @@ jobs:
           for f in extension/*.js; do node --check "$f"; done
 
       - name: Extension tests
-        run: node --test tests/scrape.test.js tests/bridges.test.js
+        run: node --test tests/scrape.test.js tests/bridges.test.js tests/options.test.js

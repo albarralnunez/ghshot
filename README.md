@@ -77,7 +77,8 @@ Then load it:
    `extension/` directory).
 3. Open the extension's **Options**, set:
    - **Bridge URL**: `http://127.0.0.1:41330` (default)
-   - **Token**: the value from `bridge/ghshot-bridge --print-token`
+   - **Token**: the value from `bridge/ghshot-bridge --print-token`. The field is masked;
+     hold **Show** to read it back, and it masks again on release
 4. Click **Save**, then **Test connection** — it should report `ok` and the bridge's
    version. Three things that catch people out:
    - **A newly loaded unpacked extension starts with empty storage.** Removing the extension

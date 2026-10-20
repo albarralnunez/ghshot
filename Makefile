@@ -31,7 +31,7 @@ lint:
 
 test:
 	bats tests/
-	node --test tests/scrape.test.js tests/bridges.test.js
+	node --test tests/scrape.test.js tests/bridges.test.js tests/options.test.js
 
 clean:
 	rm -rf "$(DIST)"

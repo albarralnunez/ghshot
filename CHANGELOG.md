@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-20
+
+### Security
+
+- **Extension:** the Options page showed every bridge token in plain text, so a screenshot,
+  a screen share or a remote console of that page leaked it. Token fields are now
+  `type="password"`; a **Show** button reveals one only while it is held down and masks it
+  again on release, pointer leave or blur. `tests/options.test.js` pins both.
+
 ## [0.7.1] - 2026-10-20
 
 ### Fixed
@@ -211,7 +220,8 @@ Security-hardening release (defense-in-depth across the CLI, bridge, extension, 
   CI (shellcheck, shfmt, py_compile, bats on Ubuntu + macOS), issue/PR templates,
   dependabot, and hermetic bats tests with a `gh` stub.
 
-[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/albarralnunez/ghshot/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/albarralnunez/ghshot/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/albarralnunez/ghshot/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/albarralnunez/ghshot/compare/v0.6.0...v0.6.1

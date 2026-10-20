@@ -29,6 +29,18 @@ function addRow(url, token) {
   urlInput.value = url || "";
   tokenInput.value = token || "";
 
+  // The token stays masked: the page is often on a screen someone else can
+  // see (a KVM, a screen share). "Show" reveals it only while held down.
+  const showButton = node.querySelector(".b-show");
+  const reveal = (on) => {
+    tokenInput.type = on ? "text" : "password";
+    showButton.textContent = on ? "Hide" : "Show";
+  };
+  showButton.addEventListener("pointerdown", () => reveal(true));
+  for (const ev of ["pointerup", "pointerleave", "pointercancel", "blur"]) {
+    showButton.addEventListener(ev, () => reveal(false));
+  }
+
   node.querySelector(".b-remove").addEventListener("click", () => {
     node.remove();
   });

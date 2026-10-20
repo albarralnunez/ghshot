@@ -8,7 +8,7 @@ allowed-tools:
   - Bash(bash:*)
 metadata:
   author: albarralnunez
-  version: 0.7.1
+  version: 0.7.2
 ---
 
 # ghshot — upload images to GitHub
