@@ -41,7 +41,7 @@
 # --force bypasses them only when you are sure.
 set -euo pipefail
 
-VERSION="0.7.0"
+VERSION="0.7.1"
 MAX_BYTES_DEFAULT=26214400 # 25 MiB
 
 die() {
@@ -348,7 +348,7 @@ upload_one() {
   rest="${url#https://}"
   host="${rest%%[/?#]*}"
   case "$url" in
-    https://github.com/user-attachments/assets/*) ;;
+    https://github.com/user-attachments/assets/* | https://github.com/user-attachments/files/*) ;;
     *)
       case "$host" in
         *.githubusercontent.com) ;;

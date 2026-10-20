@@ -36,7 +36,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, urlsplit, parse_qs
 
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 41330
 DEFAULT_TOKEN_FILE = os.path.expanduser("~/.config/ghshot/bridge-token")
@@ -51,6 +51,8 @@ REPO_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+
 # arbitrary URL (or Markdown metacharacters) through to the CLI's comment body.
 RESULT_URL_RE = re.compile(
     r"^https://github\.com/user-attachments/assets/[0-9a-fA-F-]+\Z"
+    # Non-image uploads (ghshot --force) come back as /files/<id>/<name>.
+    r"|^https://github\.com/user-attachments/files/[0-9]+/[A-Za-z0-9._~%+-]+\Z"
     # Path chars restricted to a printable RFC-3986 allowlist (no whitespace,
     # control chars, parens/brackets/backtick) so a hostile result can't smuggle
     # Markdown or terminal/log-escape sequences through to the CLI.
@@ -578,8 +580,8 @@ class GhshotHandler(BaseHTTPRequestHandler):
             if RESULT_URL_RE.match(url):
                 ok = self.store.set_result(job_id, url=url)
             else:
-                self.log_event("result job=%s rejected unexpected url"
-                               % safe_for_log(str(job_id)))
+                self.log_event("result job=%s rejected unexpected url %s"
+                               % (safe_for_log(str(job_id)), safe_for_log(url[:160])))
                 ok = self.store.set_result(
                     job_id, error="extension reported an unexpected URL")
         else:

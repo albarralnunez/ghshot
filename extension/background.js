@@ -206,19 +206,25 @@ async function pageUpload(owner, repo, base64, filename, mime) {
       }
     }
 
-    if (!repoId || !uploadToken) {
+    const fetchNonce = m1(html, /name="fetch-nonce" content="([^"]+)"/);
+    const release = m1(html, /name="release" content="([^"]+)"/);
+
+    // Signed-in React pages carry no upload token at all: same-origin requests
+    // are authorized by GitHub's "verified fetch" headers (fetch nonce) instead.
+    // So the token is optional when the page has a fetch nonce.
+    if (!uploadToken && fetchNonce) tokenSource = "none (verified fetch)";
+
+    if (!repoId || (!uploadToken && !fetchNonce)) {
       const keys = scrape.relatedKeys(html + altHtml);
       return {
         ok: false,
         error:
           "could not find upload tokens on the repo page (GitHub HTML changed): " +
-          `repository id ${repoId ? "found" : "missing"}, upload token ${uploadToken ? "found" : "missing"}; ` +
+          `repository id ${repoId ? "found" : "missing"}, upload token ${uploadToken ? "found" : "missing"}, ` +
+          `fetch nonce ${fetchNonce ? "found" : "missing"}; ` +
           `page ${pageResp.status} ${html.length}B; related keys: ${keys.join(" ") || "none"}`,
       };
     }
-
-    const fetchNonce = m1(html, /name="fetch-nonce" content="([^"]+)"/);
-    const release = m1(html, /name="release" content="([^"]+)"/);
 
     // Step 1: request an upload policy.
     const policyForm = new FormData();
@@ -226,7 +232,7 @@ async function pageUpload(owner, repo, base64, filename, mime) {
     policyForm.append("size", String(blob.size));
     policyForm.append("content_type", ctype);
     policyForm.append("repository_id", repoId);
-    policyForm.append("authenticity_token", uploadToken);
+    if (uploadToken) policyForm.append("authenticity_token", uploadToken);
     const policyHeaders = { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" };
     if (fetchNonce) {
       policyHeaders["GitHub-Verified-Fetch"] = "true";

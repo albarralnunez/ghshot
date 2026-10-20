@@ -235,6 +235,12 @@ teardown() { rm -rf "$TMP"; }
   [[ "$output" == *"not a GitHub attachment URL"* ]]
 }
 
+@test "accepts a user-attachments/files URL (non-image upload) from the bridge" {
+  run env CURL_STUB_URL='https://github.com/user-attachments/files/33723939/report.zip' bash "$SCRIPT" --force --raw "$IMG"
+  [ "$status" -eq 0 ]
+  [ "$output" = 'https://github.com/user-attachments/files/33723939/report.zip' ]
+}
+
 @test "accepts a githubusercontent.com URL from the bridge" {
   run env CURL_STUB_URL='https://avatars.githubusercontent.com/u/1' bash "$SCRIPT" --raw "$IMG"
   [ "$status" -eq 0 ]

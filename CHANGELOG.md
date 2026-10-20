@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-20
+
+### Fixed
+
+- **Extension:** uploads from a signed-in browser still failed with "upload token missing":
+  GitHub's signed-in repo and `issues/new` pages carry no upload token at all, because
+  same-origin requests are authorized by its verified-fetch headers (the page's
+  `fetch-nonce`). The upload policy request now goes without an `authenticity_token` when
+  the page has a fetch nonce and no token. The failure message also says whether the nonce
+  was found. Verified live: a signed-in upload to a public repo, and an 8 MB zip to a
+  private org repo whose download matched the source's sha256.
+- **Bridge / CLI:** a non-image upload (`--force`) comes back as
+  `https://github.com/user-attachments/files/<id>/<name>`, which both rejected as an
+  unexpected URL. Both now accept it (digits for the id, a strict charset for the name).
+  The bridge log names a rejected URL, control characters neutralized.
+
 ## [0.7.0] - 2026-10-20
 
 ### Added
@@ -195,7 +211,8 @@ Security-hardening release (defense-in-depth across the CLI, bridge, extension, 
   CI (shellcheck, shfmt, py_compile, bats on Ubuntu + macOS), issue/PR templates,
   dependabot, and hermetic bats tests with a `gh` stub.
 
-[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/albarralnunez/ghshot/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/albarralnunez/ghshot/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/albarralnunez/ghshot/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/albarralnunez/ghshot/compare/v0.5.0...v0.6.0
