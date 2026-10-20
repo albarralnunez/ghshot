@@ -75,3 +75,17 @@ jobs:
 
       - name: Run tests
         run: bats tests/
+
+  extension:
+    name: extension (node --check + scraper tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: node --check
+        run: |
+          node --version
+          for f in extension/*.js; do node --check "$f"; done
+
+      - name: Scraper tests
+        run: node --test tests/scrape.test.js

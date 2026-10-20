@@ -78,7 +78,18 @@ Then load it:
 3. Open the extension's **Options**, set:
    - **Bridge URL**: `http://127.0.0.1:41330` (default)
    - **Token**: the value from `bridge/ghshot-bridge --print-token`
-4. Click **Test connection** — it should report `ok` and the version.
+4. Click **Save**, then **Test connection** — it should report `ok` and the bridge's
+   version. Three things that catch people out:
+   - **A newly loaded unpacked extension starts with empty storage.** Removing the extension
+     wipes its storage, and loading it from a different folder gives it a different
+     extension id (Chrome derives it from the folder path), so in both cases bridges and
+     tokens must be entered again. The reload button on the card keeps them.
+   - **The CLI only talks to the bridge on its own machine** (`GHSHOT_BRIDGE_URL`). Each
+     machine that runs the CLI needs its own bridge, and the extension needs an entry for
+     each one, with *that* machine's token.
+   - **Test connection does not check the token.** It hits the unauthenticated `/healthz`,
+     so it passes with a wrong or missing token. A wrong token shows up as jobs that are
+     never claimed (`extension not connected`).
 
 Keep Chrome open and signed in to github.com. The extension long-polls the bridge and
 performs uploads from your session. **No cookies are exported and no password is stored.**
@@ -132,6 +143,16 @@ the upload itself needs only `curl` + the bridge + the extension.
   `curl -fsS http://127.0.0.1:41330/healthz`.
 - **`no bridge token found`** → set `GHSHOT_BRIDGE_TOKEN` or start the bridge to create the
   token file, then paste the token into the extension Options.
+- **`extension not connected`** with the extension loaded → open `chrome://extensions`,
+  click the ghshot card's **service worker** link, set the console level to **Verbose**
+  (the extension logs with `console.debug`), and look for `[ghshot] loop start: <url>`
+  per bridge. No loop line means no bridge has both a URL and a token saved; repeated
+  `poll … returned HTTP 401` means a wrong token. If the card says the extension is
+  disabled, turn **Developer mode** back on: Chrome disables unpacked extensions without it.
+  `lsof -nP -iTCP:41330 -sTCP:ESTABLISHED` should list a Chrome connection per bridge.
+- **`could not find upload tokens on the repo page (GitHub HTML changed)`** → GitHub moved
+  the upload token again. The error says which value is missing and lists related key
+  names on the page (never values); open an issue with that line.
 - **`upload failed` / `not signed in to github.com`** → sign in to github.com in the same
   Chrome profile the extension runs in, confirm the extension is loaded, then retry.
 - **`gh not authenticated`** → run `gh auth login`.

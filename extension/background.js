@@ -67,6 +67,9 @@ function waitTabComplete(tabId) {
 }
 
 async function injectUpload(tabId, owner, repo, base64, filename, mime) {
+  // A func injection is serialized without its closures, so the matchers are a
+  // separate file, loaded into the same isolated world first.
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["scrape.js"] });
   const injection = await chrome.scripting.executeScript({
     target: { tabId },
     func: pageUpload,
@@ -146,6 +149,8 @@ async function uploadViaTab(owner, repo, base64, filename, mime) {
 
 // Runs INSIDE github.com (first-party). MUST be fully self-contained — it is
 // serialized and injected, so it may not reference any outer-scope identifier.
+// The one exception is globalThis.ghshotScrape, which injectUpload loads from
+// scrape.js into the same isolated world just before.
 async function pageUpload(owner, repo, base64, filename, mime) {
   try {
     const bin = atob(base64);
@@ -171,35 +176,45 @@ async function pageUpload(owner, repo, base64, filename, mime) {
       return { ok: false, error: `not signed in to github.com, or no access to ${owner}/${repo}` };
     }
 
-    const repoId =
-      m1(html, /name="octolytics-dimension-repository_id"\s+content="(\d+)"/) ||
-      m1(html, /name="hovercard-subject-tag"\s+content="repository:(\d+)"/) ||
-      m1(html, /\bdata-upload-repository-id="(\d+)"/) ||
-      m1(html, /name="repository_id"[^>]*\bvalue="(\d+)"/);
+    // The matchers live in scrape.js (injected first, same isolated world) so
+    // they can be unit-tested; this function itself must stay self-contained.
+    const scrape = globalThis.ghshotScrape;
+    if (!scrape) {
+      return { ok: false, error: "page scrapers not loaded (scrape.js injection failed)" };
+    }
 
-    let uploadToken =
-      m1(html, /"uploadToken":"([^"]+)"/) ||
-      m1(html, /\bdata-upload-policy-authenticity-token="([^"]+)"/) ||
-      m1(html, /<meta name="csrf-token" content="([^"]+)"/);
+    const repoId = scrape.findRepoId(html, owner, repo);
+    let { token: uploadToken, source: tokenSource } = scrape.findUploadToken(html);
+    let altHtml = "";
 
-    // Fallback: a comment form (issues/new) reliably carries an upload token.
+    // Fallback: a comment form (issues/new) carries an upload token.
     if (repoId && !uploadToken) {
       try {
-        const alt = await (await fetch(`/${owner}/${repo}/issues/new`, {
+        altHtml = await (await fetch(`/${owner}/${repo}/issues/new`, {
           credentials: "include",
           headers: { Accept: "text/html" },
         })).text();
-        uploadToken =
-          m1(alt, /"uploadToken":"([^"]+)"/) ||
-          m1(alt, /name="authenticity_token"[^>]*\bvalue="([^"]+)"/) ||
-          m1(alt, /<meta name="csrf-token" content="([^"]+)"/);
+        ({ token: uploadToken, source: tokenSource } = scrape.findUploadToken(altHtml));
+        if (uploadToken) {
+          tokenSource = `issues/new ${tokenSource}`;
+        } else {
+          uploadToken = scrape.findFormToken(altHtml);
+          if (uploadToken) tokenSource = "issues/new authenticity_token";
+        }
       } catch (e) {
         /* ignore */
       }
     }
 
     if (!repoId || !uploadToken) {
-      return { ok: false, error: "could not find upload tokens on the repo page (GitHub HTML changed)" };
+      const keys = scrape.relatedKeys(html + altHtml);
+      return {
+        ok: false,
+        error:
+          "could not find upload tokens on the repo page (GitHub HTML changed): " +
+          `repository id ${repoId ? "found" : "missing"}, upload token ${uploadToken ? "found" : "missing"}; ` +
+          `page ${pageResp.status} ${html.length}B; related keys: ${keys.join(" ") || "none"}`,
+      };
     }
 
     const fetchNonce = m1(html, /name="fetch-nonce" content="([^"]+)"/);
@@ -227,7 +242,10 @@ async function pageUpload(owner, repo, base64, filename, mime) {
     });
     if (!policyResp.ok) {
       const detail = await policyResp.text().catch(() => "");
-      return { ok: false, error: `upload policy failed: HTTP ${policyResp.status} ${detail.slice(0, 200)}` };
+      return {
+        ok: false,
+        error: `upload policy failed: HTTP ${policyResp.status} (token from ${tokenSource}) ${detail.slice(0, 200)}`,
+      };
     }
     const p = await policyResp.json();
     if (!p || !p.upload_url || !p.form || !p.asset || !p.asset.href ||
@@ -274,6 +292,9 @@ async function pageUpload(owner, repo, base64, filename, mime) {
 // from, and its result posted back to, the bridge it came from.
 // ---------------------------------------------------------------------------
 
+// Bridges already reported as skipped for a missing token (log once each).
+const NO_TOKEN_LOGGED = new Set();
+
 async function getBridges() {
   const stored = await chrome.storage.local.get(["bridges", "bridgeUrl", "token"]);
   let list = Array.isArray(stored.bridges) ? stored.bridges : [];
@@ -285,7 +306,12 @@ async function getBridges() {
   for (const b of list) {
     const url = String((b && b.url) || "").trim().replace(/\/+$/, "");
     const token = String((b && b.token) || "").trim();
-    if (!url || !token || seen.has(url)) continue;
+    if (!url || seen.has(url)) continue;
+    if (!token) {
+      if (!NO_TOKEN_LOGGED.has(url)) console.debug("[ghshot] bridge %s has no token, not polling it", url);
+      NO_TOKEN_LOGGED.add(url);
+      continue;
+    }
     seen.add(url);
     out.push({ url, token });
   }

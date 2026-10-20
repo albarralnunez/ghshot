@@ -11,7 +11,7 @@ help:
 	@echo "  make zip      package extension/ -> $(ZIP) (upload to the Web Store)"
 	@echo "  make assets   regenerate icons + store screenshot placeholder"
 	@echo "  make lint     shellcheck + shfmt + py_compile + node --check"
-	@echo "  make test     run the bats suite"
+	@echo "  make test     run the bats suite + the node scraper tests"
 	@echo "  make clean    remove $(DIST)/"
 
 zip:
@@ -26,9 +26,11 @@ lint:
 	python3 -m py_compile bridge/ghshot-bridge
 	node --check extension/background.js
 	node --check extension/options.js
+	node --check extension/scrape.js
 
 test:
 	bats tests/
+	node --test tests/scrape.test.js
 
 clean:
 	rm -rf "$(DIST)"

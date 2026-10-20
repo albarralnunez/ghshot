@@ -80,14 +80,19 @@ async function save() {
       setStatus(`Duplicate bridge URL: ${url}`, "err");
       return;
     }
+    if (!token) {
+      // The service worker skips a bridge with no token, so it would never be
+      // polled and its jobs would fail as "extension not connected".
+      setStatus(`Bridge ${url} has no token — paste it from that machine's ~/.config/ghshot/bridge-token.`, "err");
+      return;
+    }
     seen.add(url);
     bridges.push({ url, token });
   }
   // Persist the list; drop the legacy single-bridge keys.
   await chrome.storage.local.set({ bridges });
   await chrome.storage.local.remove(["bridgeUrl", "token"]);
-  const withToken = bridges.filter((b) => b.token).length;
-  setStatus(`Saved ${bridges.length} bridge(s) (${withToken} with a token).`, "ok");
+  setStatus(`Saved ${bridges.length} bridge(s).`, "ok");
 }
 
 addButton.addEventListener("click", () => addRow("", ""));

@@ -24,7 +24,7 @@ If your change needs something outside these lists, open an issue first to discu
 skills/ghshot/   the CLI skill (ghshot.sh + SKILL.md)
 bridge/          the loopback HTTP bridge (single python3 executable)
 extension/       the MV3 Chrome extension
-tests/           bats tests + hermetic stubs (no network)
+tests/           bats tests + hermetic stubs, node scraper tests (no network)
 .github/         CI, issue/PR templates, dependabot
 ```
 
@@ -42,9 +42,15 @@ shfmt -d -i 2 -ci skills/ghshot/ghshot.sh        # -d = diff only; drop -d to fo
 # python bridge
 python3 -m py_compile bridge/ghshot-bridge
 
+# extension
+for f in extension/*.js; do node --check "$f"; done
+
 # tests (hermetic, no network)
 bats tests/
+node --test tests/scrape.test.js
 ```
+
+`make lint test` runs all of the above.
 
 All tests must stay **hermetic** — no real network, no real `gh`. Use the stubs in
 `tests/stubs/`.

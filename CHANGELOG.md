@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-20
+
+### Fixed
+
+- **Extension:** uploads failed with "could not find upload tokens on the repo page" once
+  GitHub changed the signed-in repo page. The lookup now parses the React apps' embedded
+  JSON (`<script type="application/json">`) for the upload token and for a repository id
+  that names exactly this owner/repo, and also reads raw, backslash-escaped and
+  HTML-entity encoded (`&quot;`, `&#34;`, `&#x22;`) JSON, the snake_case policy-token key,
+  and the old attribute and meta forms. The same lookup runs on the `issues/new` fallback.
+- **Extension:** when the lookup still fails, the error says which value is missing and
+  lists related key names seen on the page (names only, never values). An upload-policy
+  failure names which shape the token came from.
+- **Bridge / CLI:** report 0.6.1 (`/healthz`, `--version`), so the options page's **Test
+  connection** no longer shows the previous version after an update.
+- **Extension:** Options no longer saves a bridge that has a URL but no token. Such a bridge
+  was skipped silently, so it was never polled and its jobs failed as "extension not
+  connected"; the service worker now also logs it.
+
+### Changed
+
+- **Extension:** the page scrapers moved to `extension/scrape.js`, injected into the
+  github.com tab before the upload, and are unit-tested under node
+  (`tests/scrape.test.js`, run by `make test` and CI).
+- README: the three install gotchas (empty storage after a new unpacked load, one bridge
+  entry per CLI machine, **Test connection** does not check the token) and how to read the
+  service worker's log.
+
 ## [0.6.0] - 2026-06-28
 
 Security-hardening release (defense-in-depth across the CLI, bridge, extension, and CI).
@@ -151,7 +179,9 @@ Security-hardening release (defense-in-depth across the CLI, bridge, extension, 
   CI (shellcheck, shfmt, py_compile, bats on Ubuntu + macOS), issue/PR templates,
   dependabot, and hermetic bats tests with a `gh` stub.
 
-[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/albarralnunez/ghshot/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/albarralnunez/ghshot/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/albarralnunez/ghshot/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/albarralnunez/ghshot/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/albarralnunez/ghshot/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/albarralnunez/ghshot/compare/v0.3.0...v0.3.1
